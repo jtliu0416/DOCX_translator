@@ -18,6 +18,7 @@ from .api.tasks import router as tasks_router, run_translation
 from .api.glossaries import router as glossaries_router
 from .api.languages import router as languages_router
 from .api.settings import router as settings_router
+from .api.ws import ws_router
 
 
 @asynccontextmanager
@@ -68,6 +69,7 @@ app.include_router(tasks_router)
 app.include_router(glossaries_router)
 app.include_router(languages_router)
 app.include_router(settings_router)
+app.include_router(ws_router)
 
 
 # Serve frontend static files (production)

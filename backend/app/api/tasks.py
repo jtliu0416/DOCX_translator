@@ -159,7 +159,7 @@ async def download_task(task_id: str, request: Request):
     """Download translated DOCX."""
     db = await get_db()
     cursor = await db.execute(
-        "SELECT result_path, status FROM translation_tasks WHERE id = ?",
+        "SELECT result_path, status, original_filename FROM translation_tasks WHERE id = ?",
         (task_id,),
     )
     row = await cursor.fetchone()
@@ -172,11 +172,16 @@ async def download_task(task_id: str, request: Request):
     if not row["result_path"] or not os.path.exists(row["result_path"]):
         raise HTTPException(410, "文件已过期")
 
+    base_name = row["original_filename"] or "document"
+    if base_name.lower().endswith(".docx"):
+        base_name = base_name[:-5]
+    download_name = f"{base_name}_双语.docx"
+
     from fastapi.responses import FileResponse
     return FileResponse(
         row["result_path"],
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=os.path.basename(row["result_path"]),
+        filename=download_name,
     )
 
 
@@ -206,6 +211,38 @@ async def delete_task(task_id: str, request: Request):
     return {"message": "已删除"}
 
 
+@router.post("/{task_id}/retry")
+async def retry_task(task_id: str, request: Request, background_tasks: BackgroundTasks):
+    """Retry a failed translation task."""
+    token = _get_token(request)
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, status, token FROM translation_tasks WHERE id = ?",
+        (task_id,),
+    )
+    row = await cursor.fetchone()
+    await db.close()
+
+    if not row:
+        raise HTTPException(404, "任务不存在")
+    if row["token"] != token:
+        raise HTTPException(403, "无权操作")
+    if row["status"] != "failed":
+        raise HTTPException(400, "只能重试失败的任务")
+
+    await _update_task(
+        task_id,
+        status="pending",
+        progress=0,
+        error_message=None,
+        translated_paragraphs=0,
+        total_paragraphs=0,
+    )
+
+    background_tasks.add_task(run_translation, task_id)
+    return {"task_id": task_id, "status": "pending"}
+
+
 async def _update_task(task_id: str, **kwargs):
     """Update task fields with short-lived DB connection."""
     db = await get_db()
@@ -218,68 +255,79 @@ async def _update_task(task_id: str, **kwargs):
     await db.commit()
     await db.close()
 
+    # Broadcast via WebSocket
+    from .ws import manager as ws_manager
+    data = {"task_id": task_id}
+    for k in ("status", "progress", "translated_paragraphs", "total_paragraphs", "error_message"):
+        if k in kwargs:
+            data[k] = kwargs[k]
+    await ws_manager.broadcast(task_id, data)
+
 
 async def run_translation(task_id: str):
     """Background task: execute the full translation pipeline."""
-    # Read task info
-    db = await get_db()
-    cursor = await db.execute(
-        "SELECT original_path, glossary_id FROM translation_tasks WHERE id = ?",
-        (task_id,),
-    )
-    row = await cursor.fetchone()
-    await db.close()
+    from ..services.queue import translation_semaphore
 
-    if not row:
-        return
-
-    original_path = row["original_path"]
-    glossary_id = row["glossary_id"]
-
-    try:
-        # Step 1: Extract paragraphs
-        await _update_task(task_id, status="extracting")
-
-        task_dir = os.path.join(UPLOAD_DIR, task_id)
-        paragraphs_path = os.path.join(task_dir, "paragraphs.json")
-        data = await extract_paragraphs(original_path, paragraphs_path)
-
-        units = data.get("units", [])
-        if not units:
-            raise ValueError("文档中没有可翻译的内容")
-
-        # Step 2: Translate
-        translations = await translate_all(units, glossary_id, task_id)
-
-        # Step 3: Build bilingual DOCX
-        await _update_task(task_id, status="building")
-
-        result_dir = os.path.join(RESULT_DIR, task_id)
-        os.makedirs(result_dir, exist_ok=True)
-
-        translations_path = os.path.join(task_dir, "translations.json")
-        with open(translations_path, "w", encoding="utf-8") as f:
-            json.dump({"translations": translations}, f, ensure_ascii=False)
-
-        result_path = os.path.join(result_dir, "translated.docx")
-        paragraphs_path = os.path.join(task_dir, "paragraphs.json")
-        await insert_translations(original_path, translations_path, result_path,
-                                  paragraphs_json_path=paragraphs_path)
-
-        # Step 4: Validate (soft check — don't abort on failure)
-        valid = await validate_docx(result_path)
-        if not valid:
-            import logging
-            logging.getLogger(__name__).warning(f"DOCX validation warning for task {task_id}")
-
-        # Done
-        await _update_task(
-            task_id,
-            status="completed",
-            result_path=result_path,
-            progress=100,
-            completed_at=datetime.now(timezone.utc).isoformat(),
+    async with translation_semaphore:
+        # Re-read task after acquiring semaphore (may have been deleted while waiting)
+        db = await get_db()
+        cursor = await db.execute(
+            "SELECT original_path, glossary_id, status FROM translation_tasks WHERE id = ?",
+            (task_id,),
         )
+        row = await cursor.fetchone()
+        await db.close()
 
-    except Exception as e:
-        await _update_task(task_id, status="failed", error_message=str(e))
+        if not row or row["status"] not in ("pending", "failed"):
+            return
+
+        original_path = row["original_path"]
+        glossary_id = row["glossary_id"]
+
+        try:
+            # Step 1: Extract paragraphs
+            await _update_task(task_id, status="extracting")
+
+            task_dir = os.path.join(UPLOAD_DIR, task_id)
+            paragraphs_path = os.path.join(task_dir, "paragraphs.json")
+            data = await extract_paragraphs(original_path, paragraphs_path)
+
+            units = data.get("units", [])
+            if not units:
+                raise ValueError("文档中没有可翻译的内容")
+
+            # Step 2: Translate
+            translations = await translate_all(units, glossary_id, task_id)
+
+            # Step 3: Build bilingual DOCX
+            await _update_task(task_id, status="building")
+
+            result_dir = os.path.join(RESULT_DIR, task_id)
+            os.makedirs(result_dir, exist_ok=True)
+
+            translations_path = os.path.join(task_dir, "translations.json")
+            with open(translations_path, "w", encoding="utf-8") as f:
+                json.dump({"translations": translations}, f, ensure_ascii=False)
+
+            result_path = os.path.join(result_dir, "translated.docx")
+            paragraphs_path = os.path.join(task_dir, "paragraphs.json")
+            await insert_translations(original_path, translations_path, result_path,
+                                      paragraphs_json_path=paragraphs_path)
+
+            # Step 4: Validate (soft check — don't abort on failure)
+            valid = await validate_docx(result_path)
+            if not valid:
+                import logging
+                logging.getLogger(__name__).warning(f"DOCX validation warning for task {task_id}")
+
+            # Done
+            await _update_task(
+                task_id,
+                status="completed",
+                result_path=result_path,
+                progress=100,
+                completed_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+        except Exception as e:
+            await _update_task(task_id, status="failed", error_message=str(e))

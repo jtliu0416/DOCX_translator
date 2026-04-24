@@ -29,6 +29,10 @@ export function deleteTask(taskId) {
   return api.delete(`/tasks/${taskId}`)
 }
 
+export function retryTask(taskId) {
+  return api.post(`/tasks/${taskId}/retry`)
+}
+
 // --- Glossaries ---
 
 export function createGlossary(formData) {

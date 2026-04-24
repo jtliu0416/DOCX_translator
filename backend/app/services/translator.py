@@ -156,6 +156,16 @@ async def _update_task_progress(task_id: str, status: str = None, progress: int 
     await db.commit()
     await db.close()
 
+    # Broadcast via WebSocket
+    from ..api.ws import manager as ws_manager
+    await ws_manager.broadcast(task_id, {
+        "task_id": task_id,
+        "status": status,
+        "progress": progress,
+        "translated_paragraphs": translated,
+        "total_paragraphs": total,
+    })
+
 
 async def _translate_batch_and_track(
     batch: list[dict],

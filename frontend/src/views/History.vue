@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listTasks, downloadTask, deleteTask } from '../api'
+import { listTasks, downloadTask, deleteTask, retryTask } from '../api'
 
 const tasks = ref([])
 const total = ref(0)
@@ -43,11 +43,28 @@ async function handleDownload(taskId, filename) {
     const url = URL.createObjectURL(res.data)
     const a = document.createElement('a')
     a.href = url
-    a.download = `translated_${filename}`
+    const base = filename.replace(/\.docx$/i, '')
+    const disposition = res.headers['content-disposition']
+    let downloadName = `${base}_双语.docx`
+    if (disposition) {
+      const m = disposition.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i)
+      if (m) downloadName = decodeURIComponent(m[1].replace(/"/g, ''))
+    }
+    a.download = downloadName
     a.click()
     URL.revokeObjectURL(url)
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '下载失败')
+  }
+}
+
+async function handleRetry(taskId) {
+  try {
+    await retryTask(taskId)
+    ElMessage.success('已重新提交翻译')
+    loadTasks()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '重试失败')
   }
 }
 
@@ -86,6 +103,12 @@ async function handleDelete(taskId) {
             link
             @click="handleDownload(row.task_id, row.original_filename)"
           >下载</el-button>
+          <el-button
+            v-if="row.status === 'failed'"
+            type="warning"
+            link
+            @click="handleRetry(row.task_id)"
+          >重试</el-button>
           <el-button type="danger" link @click="handleDelete(row.task_id)">删除</el-button>
         </template>
       </el-table-column>

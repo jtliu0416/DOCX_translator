@@ -50,3 +50,4 @@ Desktop.ini
 # Sample/test files
 *.docx
 !docs/
+.superpowers/

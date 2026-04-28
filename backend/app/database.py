@@ -55,11 +55,24 @@ async def get_db() -> aiosqlite.Connection:
     return db
 
 
-MIGRATIONS: list[str] = []
+MIGRATIONS = [
+    "ALTER TABLE glossaries ADD COLUMN is_builtin INTEGER DEFAULT 0",
+    "ALTER TABLE translation_tasks ADD COLUMN use_builtin_glossary INTEGER DEFAULT 0",
+]
 
 
 async def init_db():
     db = await get_db()
     await db.executescript(SCHEMA)
+    for sql in MIGRATIONS:
+        try:
+            await db.execute(sql)
+        except Exception:
+            pass  # Column already exists
     await db.commit()
+    await db.close()
+
+    from .services.builtin_glossary import seed_builtin_glossary
+    db = await get_db()
+    await seed_builtin_glossary(db)
     await db.close()

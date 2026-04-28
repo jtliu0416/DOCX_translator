@@ -420,7 +420,14 @@ class Program
     {
         var newPara = new Paragraph();
         if (srcPara.ParagraphProperties != null)
-            newPara.AppendChild((ParagraphProperties)srcPara.ParagraphProperties.CloneNode(true));
+        {
+            var clonedProps = (ParagraphProperties)srcPara.ParagraphProperties.CloneNode(true);
+            // Remove auto-numbering to prevent inserted English paragraphs from
+            // entering the numbering sequence and shifting subsequent numbers.
+            clonedProps.NumberingProperties?.Remove();
+            clonedProps.OutlineLevel?.Remove();
+            newPara.AppendChild(clonedProps);
+        }
 
         var srcRun = srcPara.Elements<Run>().FirstOrDefault();
         newPara.AppendChild(MakeEnglishRun(engText, srcRun?.RunProperties));

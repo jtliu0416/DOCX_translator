@@ -186,10 +186,37 @@ async def _translate_batch_and_track(
     return translations
 
 
+async def _merge_glossary_terms(glossary_id: Optional[str], use_builtin: bool) -> list[dict]:
+    """Merge built-in and user glossary terms, with user terms taking priority."""
+    builtin_terms = []
+    user_terms = []
+
+    if use_builtin:
+        builtin_terms = await get_glossary_terms("builtin-biopharma-zh-en")
+
+    if glossary_id:
+        user_terms = await get_glossary_terms(glossary_id)
+
+    if not builtin_terms:
+        return user_terms
+    if not user_terms:
+        return builtin_terms
+
+    # Merge: user terms override built-in on conflict (by source term)
+    user_sources = {t["source"].lower(): t for t in user_terms}
+    merged = list(user_terms)
+    for bt in builtin_terms:
+        if bt["source"].lower() not in user_sources:
+            merged.append(bt)
+    merged.sort(key=lambda t: len(t["source"]), reverse=True)
+    return merged
+
+
 async def translate_all(
     units: list[dict],
     glossary_id: Optional[str] = None,
     task_id: str = "",
+    use_builtin: bool = False,
 ) -> list[dict]:
     to_translate = [u for u in units if not u.get("skip", False)]
     total = len(to_translate)
@@ -197,7 +224,9 @@ async def translate_all(
     if total == 0:
         return []
 
-    glossary_terms = await get_glossary_terms(glossary_id) if glossary_id else None
+    glossary_terms = None
+    if glossary_id or use_builtin:
+        glossary_terms = await _merge_glossary_terms(glossary_id, use_builtin)
 
     await _update_task_progress(task_id, status="translating", total=total)
 

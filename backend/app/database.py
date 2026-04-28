@@ -63,16 +63,16 @@ MIGRATIONS = [
 
 async def init_db():
     db = await get_db()
-    await db.executescript(SCHEMA)
-    for sql in MIGRATIONS:
-        try:
-            await db.execute(sql)
-        except Exception:
-            pass  # Column already exists
-    await db.commit()
-    await db.close()
+    try:
+        await db.executescript(SCHEMA)
+        for sql in MIGRATIONS:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass
+        await db.commit()
 
-    from .services.builtin_glossary import seed_builtin_glossary
-    db = await get_db()
-    await seed_builtin_glossary(db)
-    await db.close()
+        from .services.builtin_glossary import seed_builtin_glossary
+        await seed_builtin_glossary(db)
+    finally:
+        await db.close()

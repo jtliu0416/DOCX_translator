@@ -1,21 +1,39 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
-import { createTask, getTask, downloadTask, retryTask, listGlossaries } from '../api'
+import { createTask, getTask, downloadTask, retryTask, listGlossaries, getGlossary } from '../api'
 
 const sourceLang = ref('zh')
 const targetLang = ref('en')
 const glossaryId = ref('')
 const glossaries = ref([])
+const useBuiltinGlossary = ref(true)
+const builtinGlossary = ref(null)
+const builtinPreviewVisible = ref(false)
+const builtinTerms = ref([])
+const builtinSearch = ref('')
 const tasks = ref([])          // [{taskId, filename, status, progress, error}]
 const uploading = ref(false)
 const wsMap = new Map()
+
+const userGlossaries = computed(() => glossaries.value.filter(g => !g.is_builtin))
+
+const builtinFilteredTerms = computed(() => {
+  const q = builtinSearch.value.trim().toLowerCase()
+  if (!q) return builtinTerms.value
+  return builtinTerms.value.filter(t =>
+    t.source_term.toLowerCase().includes(q) ||
+    t.target_term.toLowerCase().includes(q) ||
+    (t.note && t.note.toLowerCase().includes(q))
+  )
+})
 
 onMounted(async () => {
   try {
     const res = await listGlossaries()
     glossaries.value = res.data
+    builtinGlossary.value = res.data.find(g => g.is_builtin) || null
   } catch {}
 })
 
@@ -23,6 +41,21 @@ onUnmounted(() => {
   wsMap.forEach(ws => ws.close())
   wsMap.clear()
 })
+
+async function showBuiltinPreview() {
+  if (!builtinGlossary.value) return
+  if (builtinTerms.value.length > 0) {
+    builtinPreviewVisible.value = true
+    return
+  }
+  try {
+    const res = await getGlossary(builtinGlossary.value.id)
+    builtinTerms.value = res.data.terms
+    builtinPreviewVisible.value = true
+  } catch {
+    ElMessage.error('加载术语表失败')
+  }
+}
 
 async function startTranslation() {
   const uploadComp = document.querySelector('.el-upload input[type=file]')
@@ -45,6 +78,7 @@ async function startTranslation() {
     if (glossaryId.value) {
       formData.append('glossary_id', glossaryId.value)
     }
+    formData.append('use_builtin_glossary', useBuiltinGlossary.value ? 'true' : 'false')
 
     try {
       const res = await createTask(formData)
@@ -204,10 +238,18 @@ const hasActive = () => tasks.value.some(t => t.status !== 'completed' && t.stat
           <el-option label="中文" value="zh" />
         </el-select>
       </el-form-item>
-      <el-form-item label="术语表">
+      <el-form-item label="内置术语表" v-if="builtinGlossary">
+        <div class="builtin-glossary-row">
+          <el-checkbox v-model="useBuiltinGlossary">
+            {{ builtinGlossary.name }} ({{ builtinGlossary.term_count }} 条)
+          </el-checkbox>
+          <el-button size="small" @click="showBuiltinPreview">预览</el-button>
+        </div>
+      </el-form-item>
+      <el-form-item label="我的术语表">
         <el-select v-model="glossaryId" clearable placeholder="可选">
           <el-option
-            v-for="g in glossaries"
+            v-for="g in userGlossaries"
             :key="g.id"
             :label="`${g.name} (${g.term_count} 条)`"
             :value="g.id"
@@ -253,6 +295,24 @@ const hasActive = () => tasks.value.some(t => t.status !== 'completed' && t.stat
         清空结果，继续翻译
       </el-button>
     </div>
+    <!-- Built-in glossary preview dialog -->
+    <el-dialog v-model="builtinPreviewVisible" :title="builtinGlossary?.name" width="700">
+      <el-input
+        v-model="builtinSearch"
+        placeholder="搜索术语（中文/英文/备注）..."
+        clearable
+        style="margin-bottom: 12px;"
+      />
+      <el-table :data="builtinFilteredTerms" max-height="500">
+        <el-table-column type="index" label="#" width="50" />
+        <el-table-column prop="source_term" label="中文" />
+        <el-table-column prop="target_term" label="英文" />
+        <el-table-column prop="note" label="备注" width="120" />
+      </el-table>
+      <div v-if="builtinSearch" style="margin-top:8px;color:#909399;font-size:12px;">
+        显示 {{ builtinFilteredTerms.length }} / {{ builtinTerms.length }} 条
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -264,4 +324,5 @@ const hasActive = () => tasks.value.some(t => t.status !== 'completed' && t.stat
 .task-filename { font-size: 14px; color: #303133; font-weight: 500; }
 .task-error { font-size: 12px; color: #f56c6c; margin-top: 4px; }
 .task-actions { margin-top: 8px; display: flex; gap: 8px; }
+.builtin-glossary-row { display: flex; align-items: center; gap: 12px; }
 </style>

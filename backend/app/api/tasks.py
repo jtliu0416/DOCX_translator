@@ -37,6 +37,7 @@ async def create_task(
     source_lang: str = Form("zh"),
     target_lang: str = Form("en"),
     glossary_id: Optional[str] = Form(None),
+    use_builtin_glossary: str = Form("false"),
 ):
     """Upload DOCX file and create translation task."""
     # Token from middleware
@@ -76,9 +77,10 @@ async def create_task(
 
     await db.execute(
         """INSERT INTO translation_tasks
-        (id, token, original_filename, original_path, glossary_id, source_lang, target_lang, status, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
-        (task_id, token, file.filename, original_path, glossary_id, source_lang, target_lang, expires_at),
+        (id, token, original_filename, original_path, glossary_id, source_lang, target_lang, status, expires_at, use_builtin_glossary)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+        (task_id, token, file.filename, original_path, glossary_id, source_lang, target_lang, expires_at,
+         1 if use_builtin_glossary == "true" else 0),
     )
     await db.commit()
     await db.close()
@@ -272,7 +274,7 @@ async def run_translation(task_id: str):
         # Re-read task after acquiring semaphore (may have been deleted while waiting)
         db = await get_db()
         cursor = await db.execute(
-            "SELECT original_path, glossary_id, status FROM translation_tasks WHERE id = ?",
+            "SELECT original_path, glossary_id, status, use_builtin_glossary FROM translation_tasks WHERE id = ?",
             (task_id,),
         )
         row = await cursor.fetchone()
@@ -283,6 +285,7 @@ async def run_translation(task_id: str):
 
         original_path = row["original_path"]
         glossary_id = row["glossary_id"]
+        use_builtin = bool(row["use_builtin_glossary"])
 
         try:
             # Step 1: Extract paragraphs
@@ -297,7 +300,7 @@ async def run_translation(task_id: str):
                 raise ValueError("文档中没有可翻译的内容")
 
             # Step 2: Translate
-            translations = await translate_all(units, glossary_id, task_id)
+            translations = await translate_all(units, glossary_id, task_id, use_builtin=use_builtin)
 
             # Step 3: Build bilingual DOCX
             await _update_task(task_id, status="building")

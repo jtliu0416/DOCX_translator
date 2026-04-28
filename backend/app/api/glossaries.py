@@ -74,7 +74,7 @@ async def list_glossaries(request: Request):
 
     db = await get_db()
     cursor = await db.execute(
-        "SELECT id, name, source_lang, target_lang, term_count, created_at FROM glossaries WHERE token = ? ORDER BY created_at DESC",
+        "SELECT id, name, source_lang, target_lang, term_count, created_at, is_builtin FROM glossaries WHERE token = ? OR is_builtin = 1 ORDER BY is_builtin DESC, created_at DESC",
         (token,),
     )
     rows = await cursor.fetchall()
@@ -87,6 +87,7 @@ async def list_glossaries(request: Request):
         "target_lang": r["target_lang"],
         "term_count": r["term_count"],
         "created_at": r["created_at"],
+        "is_builtin": bool(r["is_builtin"]),
     } for r in rows]
 
 
@@ -95,7 +96,7 @@ async def get_glossary(glossary_id: str, request: Request):
     """Get glossary detail with term preview."""
     db = await get_db()
     cursor = await db.execute(
-        "SELECT id, name, source_lang, target_lang, term_count, created_at FROM glossaries WHERE id = ?",
+        "SELECT id, name, source_lang, target_lang, term_count, created_at, is_builtin FROM glossaries WHERE id = ?",
         (glossary_id,),
     )
     row = await cursor.fetchone()
@@ -104,10 +105,18 @@ async def get_glossary(glossary_id: str, request: Request):
         await db.close()
         raise HTTPException(404, "术语表不存在")
 
-    cursor = await db.execute(
-        "SELECT source_term, target_term, note FROM glossary_terms WHERE glossary_id = ? LIMIT 50",
-        (glossary_id,),
-    )
+    is_builtin = bool(row["is_builtin"])
+
+    if is_builtin:
+        cursor = await db.execute(
+            "SELECT source_term, target_term, note FROM glossary_terms WHERE glossary_id = ?",
+            (glossary_id,),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT source_term, target_term, note FROM glossary_terms WHERE glossary_id = ? LIMIT 50",
+            (glossary_id,),
+        )
     terms = await cursor.fetchall()
     await db.close()
 
@@ -118,6 +127,7 @@ async def get_glossary(glossary_id: str, request: Request):
         "target_lang": row["target_lang"],
         "term_count": row["term_count"],
         "created_at": row["created_at"],
+        "is_builtin": is_builtin,
         "terms": [{
             "source_term": t["source_term"],
             "target_term": t["target_term"],
@@ -130,12 +140,16 @@ async def get_glossary(glossary_id: str, request: Request):
 async def delete_glossary(glossary_id: str, request: Request):
     """Delete a glossary and its file."""
     db = await get_db()
-    cursor = await db.execute("SELECT file_path FROM glossaries WHERE id = ?", (glossary_id,))
+    cursor = await db.execute("SELECT file_path, is_builtin FROM glossaries WHERE id = ?", (glossary_id,))
     row = await cursor.fetchone()
 
     if not row:
         await db.close()
         raise HTTPException(404, "术语表不存在")
+
+    if row["is_builtin"]:
+        await db.close()
+        raise HTTPException(403, "内置术语表不可删除")
 
     glossary_dir = os.path.join(GLOSSARY_DIR, glossary_id)
     shutil.rmtree(glossary_dir, ignore_errors=True)

@@ -4,9 +4,13 @@ import json
 import os
 import shutil
 import uuid
+import zipfile
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Request, Response, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from typing import Optional
 
 from ..config import (
@@ -24,9 +28,40 @@ from ..services.translator import translate_all
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
+class BatchDownloadRequest(BaseModel):
+    task_ids: list[str]
+
+
 def _get_token(request: Request) -> str:
     # Middleware always sets this
     return getattr(request.state, "token", "") or request.cookies.get("token", "")
+
+
+def _download_filename(original_filename: str | None) -> str:
+    base_name = original_filename or "document"
+    if base_name.lower().endswith(".docx"):
+        base_name = base_name[:-5]
+    return f"{base_name}_双语.docx"
+
+
+def _safe_zip_name(filename: str) -> str:
+    return filename.replace("\\", "_").replace("/", "_").strip() or "document_双语.docx"
+
+
+def _unique_zip_name(filename: str, used_names: set[str]) -> str:
+    filename = _safe_zip_name(filename)
+    if filename not in used_names:
+        used_names.add(filename)
+        return filename
+
+    stem, ext = os.path.splitext(filename)
+    index = 2
+    while True:
+        candidate = f"{stem}_{index}{ext}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        index += 1
 
 
 @router.post("")
@@ -44,6 +79,9 @@ async def create_task(
     token = _get_token(request)
     if not token:
         raise HTTPException(401, "Token missing")
+
+    if source_lang == target_lang:
+        raise HTTPException(400, "源语言和目标语言不能相同")
 
     # Validate file
     if not file.filename.endswith(".docx"):
@@ -132,6 +170,52 @@ async def list_tasks(request: Request, page: int = 1, page_size: int = 20):
     return {"total": total, "items": items}
 
 
+@router.post("/batch-download")
+async def batch_download_tasks(payload: BatchDownloadRequest, request: Request):
+    """Download multiple completed translated DOCX files as a ZIP archive."""
+    token = _get_token(request)
+    task_ids = list(dict.fromkeys(payload.task_ids))
+    if not task_ids:
+        raise HTTPException(400, "请选择要下载的任务")
+
+    placeholders = ",".join("?" for _ in task_ids)
+    db = await get_db()
+    cursor = await db.execute(
+        f"""SELECT id, result_path, status, original_filename
+            FROM translation_tasks
+            WHERE token = ? AND id IN ({placeholders})""",
+        (token, *task_ids),
+    )
+    rows = await cursor.fetchall()
+    await db.close()
+
+    rows_by_id = {row["id"]: row for row in rows}
+    missing_ids = [task_id for task_id in task_ids if task_id not in rows_by_id]
+    if missing_ids:
+        raise HTTPException(404, "部分任务不存在或无权下载")
+
+    invalid_rows = [
+        row for row in rows
+        if row["status"] != "completed" or not row["result_path"] or not os.path.exists(row["result_path"])
+    ]
+    if invalid_rows:
+        raise HTTPException(400, "只能批量下载已完成且未过期的任务")
+
+    buffer = BytesIO()
+    used_names: set[str] = set()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for task_id in task_ids:
+            row = rows_by_id[task_id]
+            archive.write(
+                row["result_path"],
+                arcname=_unique_zip_name(_download_filename(row["original_filename"]), used_names),
+            )
+
+    buffer.seek(0)
+    headers = {"Content-Disposition": "attachment; filename=translated-documents.zip"}
+    return StreamingResponse(buffer, media_type="application/zip", headers=headers)
+
+
 @router.get("/{task_id}")
 async def get_task(task_id: str, request: Request):
     """Get task detail (for polling progress)."""
@@ -174,10 +258,7 @@ async def download_task(task_id: str, request: Request):
     if not row["result_path"] or not os.path.exists(row["result_path"]):
         raise HTTPException(410, "文件已过期")
 
-    base_name = row["original_filename"] or "document"
-    if base_name.lower().endswith(".docx"):
-        base_name = base_name[:-5]
-    download_name = f"{base_name}_双语.docx"
+    download_name = _download_filename(row["original_filename"])
 
     from fastapi.responses import FileResponse
     return FileResponse(
@@ -274,7 +355,9 @@ async def run_translation(task_id: str):
         # Re-read task after acquiring semaphore (may have been deleted while waiting)
         db = await get_db()
         cursor = await db.execute(
-            "SELECT original_path, glossary_id, status, use_builtin_glossary FROM translation_tasks WHERE id = ?",
+            """SELECT original_path, glossary_id, status, use_builtin_glossary,
+                      source_lang, target_lang
+               FROM translation_tasks WHERE id = ?""",
             (task_id,),
         )
         row = await cursor.fetchone()
@@ -286,6 +369,8 @@ async def run_translation(task_id: str):
         original_path = row["original_path"]
         glossary_id = row["glossary_id"]
         use_builtin = bool(row["use_builtin_glossary"])
+        source_lang = row["source_lang"] or "zh"
+        target_lang = row["target_lang"] or "en"
 
         try:
             # Step 1: Extract paragraphs
@@ -293,14 +378,26 @@ async def run_translation(task_id: str):
 
             task_dir = os.path.join(UPLOAD_DIR, task_id)
             paragraphs_path = os.path.join(task_dir, "paragraphs.json")
-            data = await extract_paragraphs(original_path, paragraphs_path)
+            data = await extract_paragraphs(
+                original_path,
+                paragraphs_path,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
 
             units = data.get("units", [])
             if not units:
                 raise ValueError("文档中没有可翻译的内容")
 
             # Step 2: Translate
-            translations = await translate_all(units, glossary_id, task_id, use_builtin=use_builtin)
+            translations = await translate_all(
+                units,
+                glossary_id,
+                task_id,
+                use_builtin=use_builtin,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
 
             # Step 3: Build bilingual DOCX
             await _update_task(task_id, status="building")
@@ -314,8 +411,14 @@ async def run_translation(task_id: str):
 
             result_path = os.path.join(result_dir, "translated.docx")
             paragraphs_path = os.path.join(task_dir, "paragraphs.json")
-            await insert_translations(original_path, translations_path, result_path,
-                                      paragraphs_json_path=paragraphs_path)
+            await insert_translations(
+                original_path,
+                translations_path,
+                result_path,
+                paragraphs_json_path=paragraphs_path,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
 
             # Step 4: Validate (soft check — don't abort on failure)
             valid = await validate_docx(result_path)
@@ -329,6 +432,7 @@ async def run_translation(task_id: str):
                 status="completed",
                 result_path=result_path,
                 progress=100,
+                error_message=None,
                 completed_at=datetime.now(timezone.utc).isoformat(),
             )
 

@@ -7,9 +7,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Load .env file from backend directory
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-RESULT_DIR = os.path.join(BASE_DIR, "results")
-GLOSSARY_DIR = os.path.join(BASE_DIR, "glossaries")
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "uploads"))
+RESULT_DIR = os.getenv("RESULT_DIR", os.path.join(BASE_DIR, "results"))
+GLOSSARY_DIR = os.getenv("GLOSSARY_DIR", os.path.join(BASE_DIR, "glossaries"))
 
 MAX_FILE_SIZE = 10 * 1024 * 1024       # 10MB
 MAX_PARALLEL_TASKS = 50
@@ -28,7 +28,7 @@ class LLMSingleton:
 
 llm = LLMSingleton()
 
-DATABASE_PATH = os.path.join(BASE_DIR, "doctrans.db")
+DATABASE_PATH = os.getenv("DATABASE_PATH", os.path.join(BASE_DIR, "doctrans.db"))
 
 SUPPORTED_LANGUAGES = [
     {"code": "zh", "name": "中文"},

@@ -1,0 +1,18 @@
+services:
+  doctrans:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: doctrans
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_PATH: /data/doctrans.db
+      UPLOAD_DIR: /data/uploads
+      RESULT_DIR: /data/results
+      GLOSSARY_DIR: /data/glossaries
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

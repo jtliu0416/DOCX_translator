@@ -17,10 +17,10 @@
           <el-icon><Notebook /></el-icon>
           术语表
         </el-menu-item>
-        <el-menu-item index="/settings">
+        <!-- <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           设置
-        </el-menu-item>
+        </el-menu-item> -->
       </el-menu>
     </el-header>
     <el-main>

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import { createTask, getTask, downloadTask, retryTask, listGlossaries, getGlossary } from '../api'
@@ -16,6 +16,22 @@ const builtinSearch = ref('')
 const tasks = ref([])          // [{taskId, filename, status, progress, error}]
 const uploading = ref(false)
 const wsMap = new Map()
+
+function oppositeLang(lang) {
+  return lang === 'zh' ? 'en' : 'zh'
+}
+
+watch(sourceLang, (value) => {
+  if (value === targetLang.value) {
+    targetLang.value = oppositeLang(value)
+  }
+})
+
+watch(targetLang, (value) => {
+  if (value === sourceLang.value) {
+    sourceLang.value = oppositeLang(value)
+  }
+})
 
 const userGlossaries = computed(() => glossaries.value.filter(g => !g.is_builtin))
 
@@ -58,6 +74,11 @@ async function showBuiltinPreview() {
 }
 
 async function startTranslation() {
+  if (sourceLang.value === targetLang.value) {
+    ElMessage.warning('源语言和目标语言不能相同')
+    return
+  }
+
   const uploadComp = document.querySelector('.el-upload input[type=file]')
   const fileList = uploadComp?.files
   if (!fileList || fileList.length === 0) {
@@ -114,9 +135,7 @@ function connectWebSocket(entry) {
 
   ws.onmessage = (event) => {
     const d = JSON.parse(event.data)
-    if (d.status) entry.status = d.status
-    if (d.progress != null) entry.progress = d.progress
-    if (d.error_message) entry.error = d.error_message
+    applyTaskUpdate(entry.taskId, d)
 
     if (d.status === 'completed' || d.status === 'failed') {
       ws.close()
@@ -141,12 +160,13 @@ function startPollingForTask(entry) {
   const timer = setInterval(async () => {
     try {
       const res = await getTask(entry.taskId)
-      const d = res.data
-      entry.status = d.status
-      entry.progress = d.progress
-      if (d.error_message) entry.error = d.error_message
+      const task = applyTaskUpdate(entry.taskId, res.data)
+      if (!task) {
+        clearInterval(timer)
+        return
+      }
 
-      if (d.status === 'completed' || d.status === 'failed') {
+      if (task.status === 'completed' || task.status === 'failed') {
         clearInterval(timer)
       }
     } catch {
@@ -205,6 +225,29 @@ function statusType(s) {
 
 const allDone = () => tasks.value.length > 0 && tasks.value.every(t => t.status === 'completed' || t.status === 'failed')
 const hasActive = () => tasks.value.some(t => t.status !== 'completed' && t.status !== 'failed')
+
+function applyTaskUpdate(taskId, data) {
+  const task = tasks.value.find(t => t.taskId === taskId)
+  if (!task) return null
+
+  if (data.status) task.status = data.status
+  if (data.progress != null) task.progress = data.progress
+  if (data.error_message) task.error = data.error_message
+  return task
+}
+
+function getTaskWebSocketUrl(taskId) {
+  const envBase = import.meta.env.VITE_WS_BASE_URL?.trim()
+  if (envBase) {
+    return `${envBase.replace(/\/$/, '')}/ws/tasks/${taskId}`
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const hostname = window.location.hostname
+  const port = window.location.port === '5173' ? '8000' : window.location.port
+  const host = port ? `${hostname}:${port}` : hostname
+  return `${protocol}//${host}/ws/tasks/${taskId}`
+}
 </script>
 
 <template>

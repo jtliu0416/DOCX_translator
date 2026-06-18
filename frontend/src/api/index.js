@@ -25,6 +25,10 @@ export function downloadTask(taskId) {
   return api.get(`/tasks/${taskId}/download`, { responseType: 'blob' })
 }
 
+export function batchDownloadTasks(taskIds) {
+  return api.post('/tasks/batch-download', { task_ids: taskIds }, { responseType: 'blob' })
+}
+
 export function deleteTask(taskId) {
   return api.delete(`/tasks/${taskId}`)
 }

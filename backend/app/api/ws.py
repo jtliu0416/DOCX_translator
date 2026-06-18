@@ -5,6 +5,8 @@ from typing import Dict, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..database import get_db
+
 ws_router = APIRouter(tags=["websocket"])
 
 
@@ -40,9 +42,32 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+async def _send_current_task_state(websocket: WebSocket, task_id: str):
+    db = await get_db()
+    cursor = await db.execute(
+        """SELECT id, status, progress, total_paragraphs, translated_paragraphs, error_message
+           FROM translation_tasks WHERE id = ?""",
+        (task_id,),
+    )
+    row = await cursor.fetchone()
+    await db.close()
+    if not row:
+        return
+
+    await websocket.send_json({
+        "task_id": row["id"],
+        "status": row["status"],
+        "progress": row["progress"],
+        "total_paragraphs": row["total_paragraphs"],
+        "translated_paragraphs": row["translated_paragraphs"],
+        "error_message": row["error_message"],
+    })
+
+
 @ws_router.websocket("/ws/tasks/{task_id}")
 async def websocket_task_progress(websocket: WebSocket, task_id: str):
     await manager.connect(task_id, websocket)
+    await _send_current_task_state(websocket, task_id)
     try:
         while True:
             data = await websocket.receive_text()

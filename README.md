@@ -89,7 +89,32 @@ LLM_MODEL=deepseek-chat
 | 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
 | 豆包 | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-2-0-lite-260215` |
 
-### 2. 启动后端
+### 2. Docker 部署（推荐 Linux 服务器）
+
+在项目根目录执行：
+
+```bash
+docker compose up -d --build
+```
+
+说明：
+- 服务端口：`8000`
+- 数据持久化目录：`./data`（SQLite、上传文件、翻译结果、术语表）
+- 模型配置来源：`backend/.env`（由 `docker-compose.yml` 自动加载）
+
+查看日志：
+
+```bash
+docker compose logs -f
+```
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+### 3. 启动后端（本地开发）
 
 ```bash
 cd backend
@@ -97,7 +122,7 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 3. 构建前端（可选）
+### 4. 构建前端（可选）
 
 开发模式：
 ```bash
@@ -113,7 +138,7 @@ npm install
 npm run build
 ```
 
-### 4. 访问
+### 5. 访问
 
 浏览器打开 `http://localhost:8000`
 

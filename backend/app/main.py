@@ -74,6 +74,14 @@ app.include_router(ws_router)
 
 # Serve frontend static files (production)
 import os
-frontend_dist = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist")
-if os.path.isdir(frontend_dist):
-    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+
+_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath("app/main.py")))
+_frontend_dist_candidates = [
+    os.path.join(_backend_dir, "frontend", "dist"),
+    os.path.join(os.path.dirname(_backend_dir), "frontend", "dist"),
+]
+
+for frontend_dist in _frontend_dist_candidates:
+    if os.path.isdir(frontend_dist):
+        app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+        break

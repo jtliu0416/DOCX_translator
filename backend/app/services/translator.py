@@ -20,21 +20,67 @@ from ..config import (
 from ..database import get_db
 
 
-async def get_glossary_terms(glossary_id: str) -> list[dict]:
+LANGUAGE_NAMES = {
+    "zh": "中文",
+    "en": "英文",
+}
+
+
+def _normalize_lang(lang: str | None) -> str:
+    value = (lang or "").strip().lower()
+    if value in ("zh", "zh-cn", "zh_cn", "chinese", "中文"):
+        return "zh"
+    if value in ("en", "en-us", "en_us", "english"):
+        return "en"
+    return value or "zh"
+
+
+def _language_name(lang: str | None) -> str:
+    normalized = _normalize_lang(lang)
+    return LANGUAGE_NAMES.get(normalized, normalized)
+
+
+async def get_glossary_terms(
+    glossary_id: str,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+) -> list[dict]:
     db = await get_db()
     cursor = await db.execute(
-        "SELECT source_term, target_term, note FROM glossary_terms WHERE glossary_id = ?",
+        """SELECT g.source_lang, g.target_lang, t.source_term, t.target_term, t.note
+           FROM glossary_terms t
+           JOIN glossaries g ON g.id = t.glossary_id
+           WHERE t.glossary_id = ?""",
         (glossary_id,),
     )
     rows = await cursor.fetchall()
     await db.close()
 
-    terms = [{"source": r["source_term"], "target": r["target_term"], "note": r["note"]} for r in rows]
+    requested_source = _normalize_lang(source_lang)
+    requested_target = _normalize_lang(target_lang)
+    terms = []
+    for r in rows:
+        glossary_source = _normalize_lang(r["source_lang"])
+        glossary_target = _normalize_lang(r["target_lang"])
+        if glossary_source == requested_target and glossary_target == requested_source:
+            source, target = r["target_term"], r["source_term"]
+        else:
+            source, target = r["source_term"], r["target_term"]
+
+        terms.append({"source": source, "target": target, "note": r["note"]})
+
     terms.sort(key=lambda t: len(t["source"]), reverse=True)
     return terms
 
 
-def build_prompt(batch: list[dict], glossary_terms: Optional[list[dict]] = None) -> str:
+def build_prompt(
+    batch: list[dict],
+    glossary_terms: Optional[list[dict]] = None,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+) -> str:
+    source_name = _language_name(source_lang)
+    target_name = _language_name(target_lang)
     glossary_section = ""
     if glossary_terms:
         lines = [f'- "{t["source"]}" → "{t["target"]}"' for t in glossary_terms]
@@ -47,13 +93,13 @@ def build_prompt(batch: list[dict], glossary_terms: Optional[list[dict]] = None)
     items = [{"index": u["index"], "text": u["text"]} for u in batch]
     items_json = json.dumps(items, ensure_ascii=False)
 
-    return f"""你是一个专业文档翻译专家。请将以下 JSON 数组中的每段文本从中文翻译为英文。
+    return f"""你是一个专业文档翻译专家。请将以下 JSON 数组中的每段文本从{source_name}翻译为{target_name}。
 {glossary_section}
 要求：
 1. 保持原文的段落结构，一一对应
 2. 遇到术语表中的词汇，必须使用指定译文
 3. 专业术语需准确翻译
-4. 只翻译中文内容，保留原文中的数字、公式、英文术语不变
+4. 只翻译{source_name}内容，保留原文中的数字、公式、代码、编号和非{source_name}内容不变
 5. 返回相同格式的 JSON 数组
 6. 只返回翻译结果，不要添加解释
 
@@ -108,8 +154,10 @@ async def _call_openai_compatible(prompt: str) -> str:
 async def translate_batch(
     batch: list[dict],
     glossary_terms: Optional[list[dict]] = None,
+    source_lang: str = "zh",
+    target_lang: str = "en",
 ) -> list[dict]:
-    prompt = build_prompt(batch, glossary_terms)
+    prompt = build_prompt(batch, glossary_terms, source_lang, target_lang)
     call_fn = _call_anthropic if llm.provider == "anthropic" else _call_openai_compatible
 
     for attempt in range(LLM_MAX_RETRIES):
@@ -174,9 +222,11 @@ async def _translate_batch_and_track(
     total: int,
     progress_lock: asyncio.Lock,
     done_count: list[int],
+    source_lang: str,
+    target_lang: str,
 ) -> list[dict]:
     """Translate a single batch and update shared progress."""
-    translations = await translate_batch(batch, glossary_terms)
+    translations = await translate_batch(batch, glossary_terms, source_lang, target_lang)
 
     async with progress_lock:
         done_count[0] += len(batch)
@@ -186,16 +236,31 @@ async def _translate_batch_and_track(
     return translations
 
 
-async def _merge_glossary_terms(glossary_id: Optional[str], use_builtin: bool) -> list[dict]:
+async def _merge_glossary_terms(
+    glossary_id: Optional[str],
+    use_builtin: bool,
+    source_lang: str,
+    target_lang: str,
+) -> list[dict]:
     """Merge built-in and user glossary terms, with user terms taking priority."""
     builtin_terms = []
     user_terms = []
+    source = _normalize_lang(source_lang)
+    target = _normalize_lang(target_lang)
 
-    if use_builtin:
-        builtin_terms = await get_glossary_terms("builtin-biopharma-zh-en")
+    if use_builtin and {source, target} == {"zh", "en"}:
+        builtin_terms = await get_glossary_terms(
+            "builtin-biopharma-zh-en",
+            source_lang=source,
+            target_lang=target,
+        )
 
     if glossary_id:
-        user_terms = await get_glossary_terms(glossary_id)
+        user_terms = await get_glossary_terms(
+            glossary_id,
+            source_lang=source,
+            target_lang=target,
+        )
 
     if not builtin_terms:
         return user_terms
@@ -217,6 +282,8 @@ async def translate_all(
     glossary_id: Optional[str] = None,
     task_id: str = "",
     use_builtin: bool = False,
+    source_lang: str = "zh",
+    target_lang: str = "en",
 ) -> list[dict]:
     to_translate = [u for u in units if not u.get("skip", False)]
     total = len(to_translate)
@@ -226,7 +293,12 @@ async def translate_all(
 
     glossary_terms = None
     if glossary_id or use_builtin:
-        glossary_terms = await _merge_glossary_terms(glossary_id, use_builtin)
+        glossary_terms = await _merge_glossary_terms(
+            glossary_id,
+            use_builtin,
+            source_lang,
+            target_lang,
+        )
 
     await _update_task_progress(task_id, status="translating", total=total)
 
@@ -243,7 +315,16 @@ async def translate_all(
 
     async def _limited(batch):
         async with semaphore:
-            return await _translate_batch_and_track(batch, glossary_terms, task_id, total, progress_lock, done_count)
+            return await _translate_batch_and_track(
+                batch,
+                glossary_terms,
+                task_id,
+                total,
+                progress_lock,
+                done_count,
+                source_lang,
+                target_lang,
+            )
 
     results = await asyncio.gather(*[_limited(batch) for batch in batches])
 

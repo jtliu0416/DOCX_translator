@@ -1,13 +1,17 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listTasks, downloadTask, deleteTask, retryTask } from '../api'
+import { listTasks, downloadTask, batchDownloadTasks, deleteTask, retryTask } from '../api'
 
 const tasks = ref([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
+const selectedTasks = ref([])
+const batchDownloading = ref(false)
+
+const selectedCompletedTasks = computed(() => selectedTasks.value.filter(t => t.status === 'completed'))
 
 onMounted(() => loadTasks())
 
@@ -37,24 +41,57 @@ function statusType(s) {
   return 'primary'
 }
 
+function parseDownloadName(disposition, fallback) {
+  if (!disposition) return fallback
+  const m = disposition.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i)
+  if (!m) return fallback
+  return decodeURIComponent(m[1].replace(/"/g, ''))
+}
+
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 async function handleDownload(taskId, filename) {
   try {
     const res = await downloadTask(taskId)
-    const url = URL.createObjectURL(res.data)
-    const a = document.createElement('a')
-    a.href = url
     const base = filename.replace(/\.docx$/i, '')
-    const disposition = res.headers['content-disposition']
-    let downloadName = `${base}_双语.docx`
-    if (disposition) {
-      const m = disposition.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i)
-      if (m) downloadName = decodeURIComponent(m[1].replace(/"/g, ''))
-    }
-    a.download = downloadName
-    a.click()
-    URL.revokeObjectURL(url)
+    const downloadName = parseDownloadName(res.headers['content-disposition'], `${base}_双语.docx`)
+    saveBlob(res.data, downloadName)
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '下载失败')
+  }
+}
+
+function handleSelectionChange(selection) {
+  selectedTasks.value = selection
+}
+
+function isSelectableForBatch(row) {
+  return row.status === 'completed'
+}
+
+async function handleBatchDownload() {
+  const taskIds = selectedCompletedTasks.value.map(t => t.task_id)
+  if (taskIds.length === 0) {
+    ElMessage.warning('请选择已完成的任务')
+    return
+  }
+
+  batchDownloading.value = true
+  try {
+    const res = await batchDownloadTasks(taskIds)
+    const downloadName = parseDownloadName(res.headers['content-disposition'], 'translated-documents.zip')
+    saveBlob(res.data, downloadName)
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '批量下载失败')
+  } finally {
+    batchDownloading.value = false
   }
 }
 
@@ -82,7 +119,26 @@ async function handleDelete(taskId) {
   <div class="history-page">
     <h2>历史记录</h2>
 
-    <el-table :data="tasks" v-loading="loading" stripe>
+    <div class="history-toolbar">
+      <el-button
+        type="primary"
+        :disabled="selectedCompletedTasks.length === 0"
+        :loading="batchDownloading"
+        @click="handleBatchDownload"
+      >
+        批量下载
+      </el-button>
+      <span class="selection-count">已选择 {{ selectedCompletedTasks.length }} 个已完成任务</span>
+    </div>
+
+    <el-table
+      :data="tasks"
+      v-loading="loading"
+      stripe
+      row-key="task_id"
+      @selection-change="handleSelectionChange"
+    >
+      <el-table-column type="selection" width="46" :selectable="isSelectableForBatch" />
       <el-table-column prop="original_filename" label="文件名" min-width="200" />
       <el-table-column label="状态" width="120">
         <template #default="{ row }">
@@ -132,4 +188,14 @@ async function handleDelete(taskId) {
 
 <style scoped>
 .history-page { padding: 20px 0; }
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.selection-count {
+  color: #606266;
+  font-size: 13px;
+}
 </style>

@@ -1,4 +1,5 @@
 import aiosqlite
+import os
 from .config import DATABASE_PATH
 
 SCHEMA = """
@@ -50,6 +51,9 @@ CREATE INDEX IF NOT EXISTS idx_terms_glossary ON glossary_terms(glossary_id);
 
 
 async def get_db() -> aiosqlite.Connection:
+    db_dir = os.path.dirname(DATABASE_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     db = await aiosqlite.connect(DATABASE_PATH)
     db.row_factory = aiosqlite.Row
     return db

@@ -18,8 +18,8 @@ class Program
         {
             Console.WriteLine("Usage: Doctrans.DocxProc <command> [options]");
             Console.WriteLine("Commands:");
-            Console.WriteLine("  extract  --input <docx> --output <json>");
-            Console.WriteLine("  insert   --input <docx> --translations <json> --output <docx> [--paragraphs <json>]");
+            Console.WriteLine("  extract  --input <docx> --output <json> [--source-lang <zh|en>] [--target-lang <zh|en>]");
+            Console.WriteLine("  insert   --input <docx> --translations <json> --output <docx> [--paragraphs <json>] [--source-lang <zh|en>] [--target-lang <zh|en>]");
             return 1;
         }
 
@@ -71,6 +71,8 @@ class Program
         {
             // Only paragraph styles
             if (style.Type != null && style.Type.Value != StyleValues.Paragraph) continue;
+            var styleId = style.StyleId?.Value;
+            if (string.IsNullOrEmpty(styleId)) continue;
 
             var pPr = style.StyleParagraphProperties;
             var outlineLvl = pPr?.OutlineLevel;
@@ -78,7 +80,7 @@ class Program
                 && outlineLvl.Val.Value >= 0 && outlineLvl.Val.Value <= 8)
             {
                 // OutlineLevel 0 = Heading 1, 1 = Heading 2, etc.
-                map[style.StyleId] = outlineLvl.Val.Value + 1;
+                map[styleId] = outlineLvl.Val.Value + 1;
             }
         }
 
@@ -135,6 +137,8 @@ class Program
     {
         string inputPath = opts["input"];
         string outputPath = opts["output"];
+        string sourceLang = NormalizeLanguage(opts.GetValueOrDefault("source-lang", "zh"));
+        string targetLang = NormalizeLanguage(opts.GetValueOrDefault("target-lang", "en"));
 
         var units = new List<object>();
         int idx = 0;
@@ -153,9 +157,7 @@ class Program
                 string styleId = pPr?.ParagraphStyleId?.Val?.Value ?? "Normal";
                 var (isHeading, level) = DetectHeading(para, styleId, headingStyleMap);
 
-                bool hasZh = ContainsChinese(text);
-                double enRatio = EnglishRatio(text);
-                bool skip = !hasZh || (enRatio > 0.3 && hasZh);
+                var language = AnalyzeTranslatability(text, sourceLang);
 
                 units.Add(new Dictionary<string, object?>
                 {
@@ -164,9 +166,12 @@ class Program
                     ["level"] = level,
                     ["text"] = text,
                     ["style_id"] = styleId,
-                    ["contains_chinese"] = hasZh,
-                    ["already_translated"] = enRatio > 0.3 && hasZh,
-                    ["skip"] = skip,
+                    ["source_lang"] = sourceLang,
+                    ["target_lang"] = targetLang,
+                    ["contains_chinese"] = language.ContainsChinese,
+                    ["contains_english"] = language.ContainsEnglish,
+                    ["already_translated"] = language.AlreadyTranslated,
+                    ["skip"] = language.Skip,
                 });
                 idx++;
             }
@@ -183,9 +188,7 @@ class Program
                         string text = GetCellText(cell);
                         if (!string.IsNullOrEmpty(text))
                         {
-                            bool hasZh = ContainsChinese(text);
-                            double enRatio = EnglishRatio(text);
-                            bool skip = !hasZh || (enRatio > 0.3 && hasZh);
+                            var language = AnalyzeTranslatability(text, sourceLang);
 
                             units.Add(new Dictionary<string, object?>
                             {
@@ -195,9 +198,12 @@ class Program
                                 ["row_index"] = rIdx,
                                 ["col_index"] = cIdx,
                                 ["text"] = text,
-                                ["contains_chinese"] = hasZh,
-                                ["already_translated"] = enRatio > 0.3 && hasZh,
-                                ["skip"] = skip,
+                                ["source_lang"] = sourceLang,
+                                ["target_lang"] = targetLang,
+                                ["contains_chinese"] = language.ContainsChinese,
+                                ["contains_english"] = language.ContainsEnglish,
+                                ["already_translated"] = language.AlreadyTranslated,
+                                ["skip"] = language.Skip,
                             });
                             idx++;
                         }
@@ -222,6 +228,8 @@ class Program
         string inputPath = opts["input"];
         string transPath = opts["translations"];
         string outputPath = opts["output"];
+        string sourceLang = NormalizeLanguage(opts.GetValueOrDefault("source-lang", "zh"));
+        string targetLang = NormalizeLanguage(opts.GetValueOrDefault("target-lang", "en"));
 
         // Load translations
         var json = File.ReadAllText(transPath);
@@ -236,14 +244,18 @@ class Program
 
         // Load paragraph type map from extract output (if provided)
         var typeMap = new Dictionary<int, string>(); // index -> "heading" | "paragraph" | "table_cell"
+        var skipMap = new Dictionary<int, bool>();
         if (opts.TryGetValue("paragraphs", out var paragraphsPath) && File.Exists(paragraphsPath))
         {
             var pJson = File.ReadAllText(paragraphsPath);
             var pDoc = JsonDocument.Parse(pJson);
             foreach (var unit in pDoc.RootElement.GetProperty("units").EnumerateArray())
             {
-                typeMap[unit.GetProperty("index").GetInt32()] =
+                int index = unit.GetProperty("index").GetInt32();
+                typeMap[index] =
                     unit.GetProperty("type").GetString() ?? "paragraph";
+                if (unit.TryGetProperty("skip", out var skipProperty))
+                    skipMap[index] = skipProperty.GetBoolean();
             }
             Console.WriteLine($"Loaded {typeMap.Count} paragraph types from extract");
         }
@@ -264,11 +276,11 @@ class Program
                 string text = GetParaText(para);
                 if (string.IsNullOrEmpty(text)) continue;
 
-                bool hasZh = ContainsChinese(text);
-                double enRatio = EnglishRatio(text);
-                bool skip = !hasZh || (enRatio > 0.3 && hasZh);
+                bool skip = skipMap.TryGetValue(unitIdx, out var extractedSkip)
+                    ? extractedSkip
+                    : AnalyzeTranslatability(text, sourceLang).Skip;
 
-                if (!skip && transMap.TryGetValue(unitIdx, out var engText))
+                if (!skip && transMap.TryGetValue(unitIdx, out var translatedText))
                 {
                     // Use type from extract if available, otherwise detect from styles
                     bool isHeading;
@@ -289,12 +301,12 @@ class Program
                         var srcRun = para.Elements<Run>().FirstOrDefault();
                         var spaceRun = new Run(new Text(" ") { Space = SpaceProcessingModeValues.Preserve });
                         para.AppendChild(spaceRun);
-                        para.AppendChild(MakeEnglishRun(engText, srcRun?.RunProperties));
+                        para.AppendChild(MakeTranslationRun(translatedText, srcRun?.RunProperties, targetLang));
                     }
                     else
                     {
                         // Normal paragraph: insert new paragraph after
-                        var newPara = MakeEnglishParagraph(para, engText);
+                        var newPara = MakeTranslationParagraph(para, translatedText, targetLang);
                         insertAfter.Add((para, newPara));
                     }
                 }
@@ -315,18 +327,18 @@ class Program
                         string text = GetCellText(cell);
                         if (string.IsNullOrEmpty(text)) continue;
 
-                        bool hasZh = ContainsChinese(text);
-                        double enRatio = EnglishRatio(text);
-                        bool skip = !hasZh || (enRatio > 0.3 && hasZh);
+                        bool skip = skipMap.TryGetValue(unitIdx, out var extractedSkip)
+                            ? extractedSkip
+                            : AnalyzeTranslatability(text, sourceLang).Skip;
 
-                        if (!skip && transMap.TryGetValue(unitIdx, out var engText))
+                        if (!skip && transMap.TryGetValue(unitIdx, out var translatedText))
                         {
                             var lastPara = cell.Elements<Paragraph>().LastOrDefault();
                             if (lastPara != null)
                             {
                                 var srcRun = lastPara.Elements<Run>().FirstOrDefault();
                                 lastPara.AppendChild(new Run(new Break()));
-                                lastPara.AppendChild(MakeEnglishRun(engText, srcRun?.RunProperties));
+                                lastPara.AppendChild(MakeTranslationRun(translatedText, srcRun?.RunProperties, targetLang));
                             }
                         }
                         unitIdx++;
@@ -343,6 +355,16 @@ class Program
 
     // ─── Helpers ──────────────────────────────────────────────
 
+    static string NormalizeLanguage(string? lang)
+    {
+        var value = (lang ?? "").Trim().ToLowerInvariant();
+        if (value is "zh" or "zh-cn" or "zh_cn" or "chinese" or "中文")
+            return "zh";
+        if (value is "en" or "en-us" or "en_us" or "english")
+            return "en";
+        return string.IsNullOrEmpty(value) ? "zh" : value;
+    }
+
     static bool ContainsChinese(string text)
     {
         foreach (char c in text)
@@ -353,6 +375,13 @@ class Program
         return false;
     }
 
+    static bool ContainsEnglish(string text)
+    {
+        foreach (char c in text)
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) return true;
+        return false;
+    }
+
     static double EnglishRatio(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return 0.0;
@@ -360,6 +389,24 @@ class Program
         foreach (char c in text)
             if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) en++;
         return (double)en / text.Trim().Length;
+    }
+
+    static (bool ContainsChinese, bool ContainsEnglish, bool AlreadyTranslated, bool Skip)
+        AnalyzeTranslatability(string text, string sourceLang)
+    {
+        bool hasZh = ContainsChinese(text);
+        bool hasEn = ContainsEnglish(text);
+        double enRatio = EnglishRatio(text);
+
+        bool alreadyTranslated = hasZh && hasEn && enRatio > 0.3;
+        bool hasSource = sourceLang switch
+        {
+            "zh" => hasZh,
+            "en" => hasEn && enRatio > 0.3,
+            _ => !string.IsNullOrWhiteSpace(text)
+        };
+
+        return (hasZh, hasEn, alreadyTranslated, !hasSource || alreadyTranslated);
     }
 
     static string GetParaText(Paragraph p)
@@ -379,44 +426,47 @@ class Program
         return sb.ToString().Trim();
     }
 
-    static RunProperties CloneRunPropsWithArial(RunProperties? src)
+    static RunProperties CloneRunPropsForTarget(RunProperties? src, string targetLang)
     {
+        string asciiFont = "Arial";
+        string eastAsiaFont = targetLang == "zh" ? "SimSun" : "Arial";
+
         if (src == null)
         {
             return new RunProperties(
-                new RunFonts { Ascii = "Arial", HighAnsi = "Arial", EastAsia = "Arial", ComplexScript = "Arial" }
+                new RunFonts { Ascii = asciiFont, HighAnsi = asciiFont, EastAsia = eastAsiaFont, ComplexScript = asciiFont }
             );
         }
         var clone = (RunProperties)src.CloneNode(true);
         var fonts = clone.Elements<RunFonts>().FirstOrDefault();
         if (fonts != null)
         {
-            fonts.Ascii = "Arial";
-            fonts.HighAnsi = "Arial";
-            fonts.EastAsia = "Arial";
-            fonts.ComplexScript = "Arial";
+            fonts.Ascii = asciiFont;
+            fonts.HighAnsi = asciiFont;
+            fonts.EastAsia = eastAsiaFont;
+            fonts.ComplexScript = asciiFont;
         }
         else
         {
             clone.InsertAt(new RunFonts
             {
-                Ascii = "Arial", HighAnsi = "Arial",
-                EastAsia = "Arial", ComplexScript = "Arial"
+                Ascii = asciiFont, HighAnsi = asciiFont,
+                EastAsia = eastAsiaFont, ComplexScript = asciiFont
             }, 0);
         }
         return clone;
     }
 
-    static Run MakeEnglishRun(string text, RunProperties? srcProps)
+    static Run MakeTranslationRun(string text, RunProperties? srcProps, string targetLang)
     {
-        var rPr = CloneRunPropsWithArial(srcProps);
+        var rPr = CloneRunPropsForTarget(srcProps, targetLang);
         var run = new Run();
         run.AppendChild(rPr);
         run.AppendChild(new Text(text) { Space = SpaceProcessingModeValues.Preserve });
         return run;
     }
 
-    static Paragraph MakeEnglishParagraph(Paragraph srcPara, string engText)
+    static Paragraph MakeTranslationParagraph(Paragraph srcPara, string translatedText, string targetLang)
     {
         var newPara = new Paragraph();
         if (srcPara.ParagraphProperties != null)
@@ -430,7 +480,7 @@ class Program
         }
 
         var srcRun = srcPara.Elements<Run>().FirstOrDefault();
-        newPara.AppendChild(MakeEnglishRun(engText, srcRun?.RunProperties));
+        newPara.AppendChild(MakeTranslationRun(translatedText, srcRun?.RunProperties, targetLang));
         return newPara;
     }
 }

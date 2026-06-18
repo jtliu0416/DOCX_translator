@@ -18,6 +18,10 @@ SKILL_DIR = os.path.join(os.path.expanduser("~"), ".claude", "skills", "minimax-
 MINIMAX_CLI = os.path.join(SKILL_DIR, "scripts", "dotnet", "MiniMaxAIDocx.Cli")
 
 DOTNET_DLL = os.path.join(DOTNET_PROJECT, "bin", "Debug", "net8.0", "Doctrans.DocxProc.dll")
+DOTNET_PUBLISH_DIR = os.path.join(DOTNET_PROJECT, "publish")
+DOTNET_PUBLISH_EXE = os.path.join(DOTNET_PUBLISH_DIR, "Doctrans.DocxProc")
+if sys.platform == "win32":
+    DOTNET_PUBLISH_EXE += ".exe"
 
 # .NET executable path
 DOTNET_EXE = "dotnet"
@@ -38,8 +42,23 @@ def _env():
     return env
 
 
+def _project_source_mtime() -> float:
+    newest = 0.0
+    for root, _, files in os.walk(DOTNET_PROJECT):
+        if any(part in ("bin", "obj", "publish") for part in root.split(os.sep)):
+            continue
+        for name in files:
+            if name.endswith((".cs", ".csproj")):
+                newest = max(newest, os.path.getmtime(os.path.join(root, name)))
+    return newest
+
+
+def _is_current_build(path: str) -> bool:
+    return os.path.exists(path) and os.path.getmtime(path) >= _project_source_mtime()
+
+
 def _ensure_built():
-    if os.path.exists(DOTNET_DLL):
+    if _is_current_build(DOTNET_PUBLISH_EXE) or _is_current_build(DOTNET_DLL):
         return
     result = subprocess.run(
         [DOTNET_EXE, "build", DOTNET_PROJECT, "--verbosity", "quiet"],
@@ -51,7 +70,10 @@ def _ensure_built():
 
 def _run_dotnet_sync(command: str, args: list[str]) -> subprocess.CompletedProcess:
     _ensure_built()
-    cmd = [DOTNET_EXE, DOTNET_DLL, command] + args
+    if _is_current_build(DOTNET_PUBLISH_EXE):
+        cmd = [DOTNET_PUBLISH_EXE, command] + args
+    else:
+        cmd = [DOTNET_EXE, DOTNET_DLL, command] + args
     return subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=_env())
 
 
@@ -59,8 +81,21 @@ async def _run_dotnet(command: str, args: list[str]) -> subprocess.CompletedProc
     return await asyncio.to_thread(_run_dotnet_sync, command, args)
 
 
-async def extract_paragraphs(docx_path: str, output_json_path: str) -> dict:
-    result = await _run_dotnet("extract", ["--input", docx_path, "--output", output_json_path])
+async def extract_paragraphs(
+    docx_path: str,
+    output_json_path: str,
+    source_lang: str = "zh",
+    target_lang: str = "en",
+) -> dict:
+    result = await _run_dotnet(
+        "extract",
+        [
+            "--input", docx_path,
+            "--output", output_json_path,
+            "--source-lang", source_lang,
+            "--target-lang", target_lang,
+        ],
+    )
     if result.returncode != 0:
         raise RuntimeError(f"extract_paragraphs failed: {result.stderr}\n{result.stdout}")
 
@@ -68,12 +103,20 @@ async def extract_paragraphs(docx_path: str, output_json_path: str) -> dict:
         return json.load(f)
 
 
-async def insert_translations(docx_path: str, translations_json_path: str, output_path: str,
-                              paragraphs_json_path: str = ""):
+async def insert_translations(
+    docx_path: str,
+    translations_json_path: str,
+    output_path: str,
+    paragraphs_json_path: str = "",
+    source_lang: str = "zh",
+    target_lang: str = "en",
+):
     args = [
         "--input", docx_path,
         "--translations", translations_json_path,
         "--output", output_path,
+        "--source-lang", source_lang,
+        "--target-lang", target_lang,
     ]
     if paragraphs_json_path:
         args.extend(["--paragraphs", paragraphs_json_path])

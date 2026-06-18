@@ -17,6 +17,7 @@ backend/.env.*
 
 # Database
 backend/doctrans.db
+data/
 
 # Uploads & results (runtime data)
 backend/uploads/
@@ -46,8 +47,10 @@ Desktop.ini
 
 # Logs
 *.log
+.run-logs/
 
 # Sample/test files
 *.docx
+test_docs/
 !docs/
 .superpowers/

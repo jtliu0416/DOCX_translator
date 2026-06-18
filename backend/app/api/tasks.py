@@ -23,9 +23,16 @@ from ..config import (
 )
 from ..database import get_db
 from ..services.docx_handler import extract_paragraphs, insert_translations, validate_docx
+from ..services.excel_handler import extract_cells, insert_cell_translations, validate_xlsx
 from ..services.translator import translate_all
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+SUPPORTED_FILE_EXTENSIONS = {".docx", ".xlsx"}
+RESULT_MEDIA_TYPES = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 
 
 class BatchDownloadRequest(BaseModel):
@@ -37,11 +44,18 @@ def _get_token(request: Request) -> str:
     return getattr(request.state, "token", "") or request.cookies.get("token", "")
 
 
+def _file_extension(filename: str | None) -> str:
+    return os.path.splitext(filename or "")[1].lower()
+
+
 def _download_filename(original_filename: str | None) -> str:
     base_name = original_filename or "document"
-    if base_name.lower().endswith(".docx"):
-        base_name = base_name[:-5]
-    return f"{base_name}_双语.docx"
+    ext = _file_extension(base_name)
+    if ext in SUPPORTED_FILE_EXTENSIONS:
+        base_name = base_name[:-len(ext)]
+    else:
+        ext = ".docx"
+    return f"{base_name}_双语{ext}"
 
 
 def _safe_zip_name(filename: str) -> str:
@@ -64,6 +78,10 @@ def _unique_zip_name(filename: str, used_names: set[str]) -> str:
         index += 1
 
 
+def _result_media_type(filename: str | None) -> str:
+    return RESULT_MEDIA_TYPES.get(_file_extension(filename), RESULT_MEDIA_TYPES[".docx"])
+
+
 @router.post("")
 async def create_task(
     request: Request,
@@ -74,7 +92,7 @@ async def create_task(
     glossary_id: Optional[str] = Form(None),
     use_builtin_glossary: str = Form("false"),
 ):
-    """Upload DOCX file and create translation task."""
+    """Upload DOCX/XLSX file and create translation task."""
     # Token from middleware
     token = _get_token(request)
     if not token:
@@ -84,8 +102,9 @@ async def create_task(
         raise HTTPException(400, "源语言和目标语言不能相同")
 
     # Validate file
-    if not file.filename.endswith(".docx"):
-        raise HTTPException(400, "仅支持 .docx 文件")
+    ext = _file_extension(file.filename)
+    if ext not in SUPPORTED_FILE_EXTENSIONS:
+        raise HTTPException(400, "仅支持 .docx / .xlsx 文件")
 
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
@@ -107,7 +126,7 @@ async def create_task(
     task_dir = os.path.join(UPLOAD_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
-    original_path = os.path.join(task_dir, "original.docx")
+    original_path = os.path.join(task_dir, f"original{ext}")
     with open(original_path, "wb") as f:
         f.write(content)
 
@@ -242,7 +261,7 @@ async def get_task(task_id: str, request: Request):
 
 @router.get("/{task_id}/download")
 async def download_task(task_id: str, request: Request):
-    """Download translated DOCX."""
+    """Download translated document."""
     db = await get_db()
     cursor = await db.execute(
         "SELECT result_path, status, original_filename FROM translation_tasks WHERE id = ?",
@@ -263,7 +282,7 @@ async def download_task(task_id: str, request: Request):
     from fastapi.responses import FileResponse
     return FileResponse(
         row["result_path"],
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        media_type=_result_media_type(row["original_filename"]),
         filename=download_name,
     )
 
@@ -373,17 +392,29 @@ async def run_translation(task_id: str):
         target_lang = row["target_lang"] or "en"
 
         try:
-            # Step 1: Extract paragraphs
+            ext = _file_extension(original_path)
+            if ext not in SUPPORTED_FILE_EXTENSIONS:
+                raise ValueError("仅支持 .docx / .xlsx 文件")
+
+            # Step 1: Extract document units
             await _update_task(task_id, status="extracting")
 
             task_dir = os.path.join(UPLOAD_DIR, task_id)
-            paragraphs_path = os.path.join(task_dir, "paragraphs.json")
-            data = await extract_paragraphs(
-                original_path,
-                paragraphs_path,
-                source_lang=source_lang,
-                target_lang=target_lang,
-            )
+            units_path = os.path.join(task_dir, "units.json")
+            if ext == ".xlsx":
+                data = await extract_cells(
+                    original_path,
+                    units_path,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                )
+            else:
+                data = await extract_paragraphs(
+                    original_path,
+                    units_path,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                )
 
             units = data.get("units", [])
             if not units:
@@ -409,22 +440,30 @@ async def run_translation(task_id: str):
             with open(translations_path, "w", encoding="utf-8") as f:
                 json.dump({"translations": translations}, f, ensure_ascii=False)
 
-            result_path = os.path.join(result_dir, "translated.docx")
-            paragraphs_path = os.path.join(task_dir, "paragraphs.json")
-            await insert_translations(
-                original_path,
-                translations_path,
-                result_path,
-                paragraphs_json_path=paragraphs_path,
-                source_lang=source_lang,
-                target_lang=target_lang,
-            )
+            result_path = os.path.join(result_dir, f"translated{ext}")
+            if ext == ".xlsx":
+                await insert_cell_translations(
+                    original_path,
+                    translations_path,
+                    result_path,
+                    cells_json_path=units_path,
+                )
+                valid = await validate_xlsx(result_path)
+            else:
+                await insert_translations(
+                    original_path,
+                    translations_path,
+                    result_path,
+                    paragraphs_json_path=units_path,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                )
+                valid = await validate_docx(result_path)
 
             # Step 4: Validate (soft check — don't abort on failure)
-            valid = await validate_docx(result_path)
             if not valid:
                 import logging
-                logging.getLogger(__name__).warning(f"DOCX validation warning for task {task_id}")
+                logging.getLogger(__name__).warning(f"Output validation warning for task {task_id}")
 
             # Done
             await _update_task(

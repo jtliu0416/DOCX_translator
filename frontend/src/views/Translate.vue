@@ -14,9 +14,11 @@ const builtinPreviewVisible = ref(false)
 const builtinTerms = ref([])
 const builtinSearch = ref('')
 const uploadFiles = ref([])
+const pendingFiles = ref([])
 const tasks = ref([])          // [{taskId, filename, status, progress, error}]
 const uploading = ref(false)
 const wsMap = new Map()
+const supportedFilePattern = /\.(docx|xlsx)$/i
 
 function oppositeLang(lang) {
   return lang === 'zh' ? 'en' : 'zh'
@@ -74,34 +76,66 @@ async function showBuiltinPreview() {
   }
 }
 
+function normalizeUploadFile(item) {
+  if (!item) return null
+  if (typeof File !== 'undefined' && item instanceof File) return item
+  return item.raw || item.originFileObj || item.file || null
+}
+
+function isUploadableFile(file) {
+  return file &&
+    typeof file.name === 'string' &&
+    typeof file.size === 'number' &&
+    (typeof Blob === 'undefined' || file instanceof Blob || typeof file.arrayBuffer === 'function')
+}
+
+function collectUploadFiles(fileList) {
+  return fileList
+    .map(normalizeUploadFile)
+    .filter(isUploadableFile)
+}
+
+function syncUploadFiles(fileList) {
+  uploadFiles.value = fileList
+  pendingFiles.value = collectUploadFiles(fileList)
+}
+
+function handleUploadChange(_, fileList) {
+  syncUploadFiles(fileList)
+}
+
+function handleUploadRemove(_, fileList) {
+  syncUploadFiles(fileList)
+}
+
 async function startTranslation() {
   if (sourceLang.value === targetLang.value) {
     ElMessage.warning('源语言和目标语言不能相同')
     return
   }
 
-  const selectedFiles = uploadFiles.value
-    .map(item => item.raw)
-    .filter(file => file && typeof file.name === 'string')
+  const selectedFiles = pendingFiles.value.length > 0
+    ? pendingFiles.value
+    : collectUploadFiles(uploadFiles.value)
 
   if (selectedFiles.length === 0) {
     ElMessage.warning('请先上传文件')
     return
   }
 
-  const docxFiles = selectedFiles.filter(file => file.name.toLowerCase().endsWith('.docx'))
-  if (docxFiles.length === 0) {
-    ElMessage.warning('仅支持 .docx 文件')
+  const documentFiles = selectedFiles.filter(file => supportedFilePattern.test(file.name))
+  if (documentFiles.length === 0) {
+    ElMessage.warning('仅支持 .docx / .xlsx 文件')
     return
   }
-  if (docxFiles.length !== selectedFiles.length) {
-    ElMessage.warning('已忽略非 .docx 文件')
+  if (documentFiles.length !== selectedFiles.length) {
+    ElMessage.warning('已忽略非 .docx / .xlsx 文件')
   }
 
   uploading.value = true
   tasks.value = []
 
-  for (const f of docxFiles) {
+  for (const f of documentFiles) {
     const formData = new FormData()
     formData.append('file', f)
     formData.append('source_lang', sourceLang.value)
@@ -139,9 +173,7 @@ async function startTranslation() {
 function connectWebSocket(entry) {
   if (!entry.taskId) return
 
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.host
-  const ws = new WebSocket(`${protocol}//${host}/ws/tasks/${entry.taskId}`)
+  const ws = new WebSocket(getTaskWebSocketUrl(entry.taskId))
 
   ws.onmessage = (event) => {
     const d = JSON.parse(event.data)
@@ -191,9 +223,11 @@ async function handleDownload(task) {
     const url = URL.createObjectURL(res.data)
     const a = document.createElement('a')
     a.href = url
-    const base = task.filename.replace(/\.docx$/i, '')
+    const extMatch = task.filename.match(/\.(docx|xlsx)$/i)
+    const ext = extMatch ? extMatch[0] : '.docx'
+    const base = task.filename.replace(/\.(docx|xlsx)$/i, '')
     const disposition = res.headers['content-disposition']
-    let downloadName = `${base}_双语.docx`
+    let downloadName = `${base}_双语${ext}`
     if (disposition) {
       const m = disposition.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i)
       if (m) downloadName = decodeURIComponent(m[1].replace(/"/g, ''))
@@ -270,12 +304,14 @@ function getTaskWebSocketUrl(taskId) {
       drag
       multiple
       :auto-upload="false"
-      accept=".docx"
+      accept=".docx,.xlsx"
+      :on-change="handleUploadChange"
+      :on-remove="handleUploadRemove"
     >
       <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
       <div class="el-upload__text">拖拽文件到此处，或<em>点击上传</em>（支持多文件）</div>
       <template #tip>
-        <div class="el-upload__tip">仅支持 .docx 文件，单个文件最大 10MB</div>
+        <div class="el-upload__tip">支持 .docx / .xlsx 文件，单个文件最大 10MB</div>
       </template>
     </el-upload>
 

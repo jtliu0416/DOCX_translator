@@ -60,8 +60,10 @@ function saveBlob(blob, filename) {
 async function handleDownload(taskId, filename) {
   try {
     const res = await downloadTask(taskId)
-    const base = filename.replace(/\.docx$/i, '')
-    const downloadName = parseDownloadName(res.headers['content-disposition'], `${base}_双语.docx`)
+    const extMatch = filename.match(/\.(docx|xlsx)$/i)
+    const ext = extMatch ? extMatch[0] : '.docx'
+    const base = filename.replace(/\.(docx|xlsx)$/i, '')
+    const downloadName = parseDownloadName(res.headers['content-disposition'], `${base}_双语${ext}`)
     saveBlob(res.data, downloadName)
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '下载失败')

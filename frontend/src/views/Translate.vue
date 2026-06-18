@@ -13,6 +13,7 @@ const builtinGlossary = ref(null)
 const builtinPreviewVisible = ref(false)
 const builtinTerms = ref([])
 const builtinSearch = ref('')
+const uploadFiles = ref([])
 const tasks = ref([])          // [{taskId, filename, status, progress, error}]
 const uploading = ref(false)
 const wsMap = new Map()
@@ -79,19 +80,28 @@ async function startTranslation() {
     return
   }
 
-  const uploadComp = document.querySelector('.el-upload input[type=file]')
-  const fileList = uploadComp?.files
-  if (!fileList || fileList.length === 0) {
+  const selectedFiles = uploadFiles.value
+    .map(item => item.raw)
+    .filter(file => file && typeof file.name === 'string')
+
+  if (selectedFiles.length === 0) {
     ElMessage.warning('请先上传文件')
     return
+  }
+
+  const docxFiles = selectedFiles.filter(file => file.name.toLowerCase().endsWith('.docx'))
+  if (docxFiles.length === 0) {
+    ElMessage.warning('仅支持 .docx 文件')
+    return
+  }
+  if (docxFiles.length !== selectedFiles.length) {
+    ElMessage.warning('已忽略非 .docx 文件')
   }
 
   uploading.value = true
   tasks.value = []
 
-  for (const f of fileList) {
-    if (!f.name.endsWith('.docx')) continue
-
+  for (const f of docxFiles) {
     const formData = new FormData()
     formData.append('file', f)
     formData.append('source_lang', sourceLang.value)
@@ -255,6 +265,7 @@ function getTaskWebSocketUrl(taskId) {
     <h2>文档翻译</h2>
 
     <el-upload
+      v-model:file-list="uploadFiles"
       class="upload-area"
       drag
       multiple

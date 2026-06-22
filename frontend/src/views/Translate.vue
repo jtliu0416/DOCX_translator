@@ -18,6 +18,8 @@ const pendingFiles = ref([])
 const tasks = ref([])          // [{taskId, filename, status, progress, error}]
 const uploading = ref(false)
 const wsMap = new Map()
+const pollingMap = new Map()
+const heartbeatMap = new Map()
 const supportedFilePattern = /\.(docx|xlsx)$/i
 
 function oppositeLang(lang) {
@@ -59,6 +61,10 @@ onMounted(async () => {
 onUnmounted(() => {
   wsMap.forEach(ws => ws.close())
   wsMap.clear()
+  pollingMap.forEach(timer => clearInterval(timer))
+  pollingMap.clear()
+  heartbeatMap.forEach(timer => clearInterval(timer))
+  heartbeatMap.clear()
 })
 
 async function showBuiltinPreview() {
@@ -173,48 +179,62 @@ async function startTranslation() {
 function connectWebSocket(entry) {
   if (!entry.taskId) return
 
+  closeTaskWebSocket(entry.taskId)
+  stopTaskHeartbeat(entry.taskId)
+  startPollingForTask(entry)
+
   const ws = new WebSocket(getTaskWebSocketUrl(entry.taskId))
 
   ws.onmessage = (event) => {
+    if (event.data === 'pong') return
+
     const d = JSON.parse(event.data)
     applyTaskUpdate(entry.taskId, d)
 
     if (d.status === 'completed' || d.status === 'failed') {
-      ws.close()
-      wsMap.delete(entry.taskId)
+      stopPollingForTask(entry.taskId)
+      stopTaskHeartbeat(entry.taskId)
+      closeTaskWebSocket(entry.taskId)
     }
   }
 
   ws.onerror = () => {
-    ws.close()
-    wsMap.delete(entry.taskId)
-    startPollingForTask(entry)
+    closeTaskWebSocket(entry.taskId)
+    stopTaskHeartbeat(entry.taskId)
   }
 
   ws.onclose = () => {
     wsMap.delete(entry.taskId)
+    stopTaskHeartbeat(entry.taskId)
   }
 
   wsMap.set(entry.taskId, ws)
+  startTaskHeartbeat(entry.taskId, ws)
 }
 
 function startPollingForTask(entry) {
+  if (!entry.taskId || pollingMap.has(entry.taskId)) return
+
   const timer = setInterval(async () => {
     try {
       const res = await getTask(entry.taskId)
       const task = applyTaskUpdate(entry.taskId, res.data)
       if (!task) {
-        clearInterval(timer)
+        stopPollingForTask(entry.taskId)
         return
       }
 
       if (task.status === 'completed' || task.status === 'failed') {
-        clearInterval(timer)
+        stopPollingForTask(entry.taskId)
+        stopTaskHeartbeat(entry.taskId)
+        closeTaskWebSocket(entry.taskId)
       }
     } catch {
-      clearInterval(timer)
+      stopPollingForTask(entry.taskId)
     }
   }, 2000)
+
+  pollingMap.set(entry.taskId, timer)
 }
 
 async function handleDownload(task) {
@@ -269,6 +289,36 @@ function statusType(s) {
 
 const allDone = () => tasks.value.length > 0 && tasks.value.every(t => t.status === 'completed' || t.status === 'failed')
 const hasActive = () => tasks.value.some(t => t.status !== 'completed' && t.status !== 'failed')
+
+function stopPollingForTask(taskId) {
+  const timer = pollingMap.get(taskId)
+  if (!timer) return
+  clearInterval(timer)
+  pollingMap.delete(taskId)
+}
+
+function closeTaskWebSocket(taskId) {
+  const ws = wsMap.get(taskId)
+  if (!ws) return
+  wsMap.delete(taskId)
+  ws.close()
+}
+
+function startTaskHeartbeat(taskId, ws) {
+  const timer = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send('ping')
+    }
+  }, 15000)
+  heartbeatMap.set(taskId, timer)
+}
+
+function stopTaskHeartbeat(taskId) {
+  const timer = heartbeatMap.get(taskId)
+  if (!timer) return
+  clearInterval(timer)
+  heartbeatMap.delete(taskId)
+}
 
 function applyTaskUpdate(taskId, data) {
   const task = tasks.value.find(t => t.taskId === taskId)

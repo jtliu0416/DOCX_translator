@@ -247,7 +247,8 @@ async function handleDownload(task) {
     const ext = extMatch ? extMatch[0] : '.docx'
     const base = task.filename.replace(/\.(docx|xlsx)$/i, '')
     const disposition = res.headers['content-disposition']
-    let downloadName = `${base}_双语${ext}`
+    const suffix = ext.toLowerCase() === '.xlsx' ? '翻译版' : '双语'
+    let downloadName = `${base}_${suffix}${ext}`
     if (disposition) {
       const m = disposition.match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i)
       if (m) downloadName = decodeURIComponent(m[1].replace(/"/g, ''))

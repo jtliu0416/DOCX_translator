@@ -10,6 +10,9 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+INVALID_SHEET_TITLE_CHARS = set(":\\/?*[]")
+MAX_SHEET_TITLE_LENGTH = 31
+
 
 def _contains_chinese(text: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" or "\u3400" <= char <= "\u4dbf" for char in text)
@@ -31,25 +34,44 @@ def _analyze_translatability(text: str, source_lang: str) -> dict[str, bool]:
     has_chinese = _contains_chinese(text)
     has_english = _contains_english(text)
     english_ratio = _english_ratio(text)
-    already_translated = has_chinese and has_english and english_ratio > 0.3
 
     if source_lang == "zh":
         has_source = has_chinese
     elif source_lang == "en":
-        has_source = has_english and english_ratio > 0.3
+        has_source = has_english
     else:
         has_source = bool(text.strip())
 
     return {
         "contains_chinese": has_chinese,
         "contains_english": has_english,
-        "already_translated": already_translated,
-        "skip": not has_source or already_translated,
+        "already_translated": False,
+        "skip": not has_source,
     }
 
 
 def _is_text_cell_value(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _sanitize_sheet_title(title: str, fallback: str) -> str:
+    sanitized = "".join(
+        "_" if char in INVALID_SHEET_TITLE_CHARS or ord(char) < 32 else char
+        for char in title.strip()
+    ).strip()
+    if not sanitized:
+        sanitized = fallback
+    return sanitized[:MAX_SHEET_TITLE_LENGTH]
+
+
+def _unique_sheet_title(title: str, existing_titles: set[str]) -> str:
+    candidate = title
+    index = 2
+    while candidate.lower() in existing_titles:
+        suffix = f"_{index}"
+        candidate = f"{title[:MAX_SHEET_TITLE_LENGTH - len(suffix)]}{suffix}"
+        index += 1
+    return candidate
 
 
 def _extract_cells_sync(
@@ -63,6 +85,19 @@ def _extract_cells_sync(
     index = 0
 
     for worksheet in workbook.worksheets:
+        sheet_title = worksheet.title.strip()
+        language = _analyze_translatability(sheet_title, source_lang)
+        units.append({
+            "index": index,
+            "type": "excel_sheet",
+            "sheet_name": worksheet.title,
+            "text": sheet_title,
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            **language,
+        })
+        index += 1
+
         for row in worksheet.iter_rows():
             for cell in row:
                 if not _is_text_cell_value(cell.value):
@@ -130,7 +165,7 @@ def _insert_translations_sync(
 
     workbook = load_workbook(xlsx_path, data_only=False)
     for unit in units:
-        if unit.get("skip"):
+        if unit.get("type") != "excel_cell" or unit.get("skip"):
             continue
 
         translated_text = translations.get(int(unit["index"]))
@@ -147,6 +182,28 @@ def _insert_translations_sync(
             continue
 
         cell.value = translated_text
+
+    existing_titles = {worksheet.title.lower() for worksheet in workbook.worksheets}
+    for unit in units:
+        if unit.get("type") != "excel_sheet" or unit.get("skip"):
+            continue
+
+        translated_text = translations.get(int(unit["index"]))
+        if not translated_text:
+            continue
+
+        original_title = unit["sheet_name"]
+        if original_title not in workbook.sheetnames:
+            continue
+
+        worksheet = workbook[original_title]
+        existing_titles.discard(worksheet.title.lower())
+
+        fallback = f"Sheet{workbook.worksheets.index(worksheet) + 1}"
+        translated_title = _sanitize_sheet_title(translated_text, fallback)
+        translated_title = _unique_sheet_title(translated_title, existing_titles)
+        worksheet.title = translated_title
+        existing_titles.add(translated_title.lower())
 
     workbook.save(output_path)
 

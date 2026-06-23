@@ -55,11 +55,12 @@ def _download_filename(original_filename: str | None) -> str:
         base_name = base_name[:-len(ext)]
     else:
         ext = ".docx"
-    return f"{base_name}_双语{ext}"
+    suffix = "翻译版" if ext == ".xlsx" else "双语"
+    return f"{base_name}_{suffix}{ext}"
 
 
 def _safe_zip_name(filename: str) -> str:
-    return filename.replace("\\", "_").replace("/", "_").strip() or "document_双语.docx"
+    return filename.replace("\\", "_").replace("/", "_").strip() or "document_翻译版.xlsx"
 
 
 def _unique_zip_name(filename: str, used_names: set[str]) -> str:

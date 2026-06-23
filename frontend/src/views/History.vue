@@ -63,7 +63,8 @@ async function handleDownload(taskId, filename) {
     const extMatch = filename.match(/\.(docx|xlsx)$/i)
     const ext = extMatch ? extMatch[0] : '.docx'
     const base = filename.replace(/\.(docx|xlsx)$/i, '')
-    const downloadName = parseDownloadName(res.headers['content-disposition'], `${base}_双语${ext}`)
+    const suffix = ext.toLowerCase() === '.xlsx' ? '翻译版' : '双语'
+    const downloadName = parseDownloadName(res.headers['content-disposition'], `${base}_${suffix}${ext}`)
     saveBlob(res.data, downloadName)
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '下载失败')

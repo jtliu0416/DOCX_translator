@@ -14,19 +14,25 @@ venv/
 backend/.env
 backend/.env.*
 !.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
 
 # Database
 backend/doctrans.db
+backend/doctrans.db.backup_*
 data/
 
 # Uploads & results (runtime data)
 backend/uploads/
 backend/results/
 backend/glossaries/
+/uploads/
 
 # .NET build output
 backend/scripts/Doctrans.DocxProc/bin/
 backend/scripts/Doctrans.DocxProc/obj/
+backend/scripts/Doctrans.DocxProc/publish-*/
 
 # Frontend build output
 frontend/dist/
@@ -53,4 +59,8 @@ Desktop.ini
 *.docx
 test_docs/
 !docs/
+
+# Local exports and transfer archives
+/*.xlsx
+/*.tgz
 .superpowers/

@@ -60,9 +60,9 @@ function saveBlob(blob, filename) {
 async function handleDownload(taskId, filename) {
   try {
     const res = await downloadTask(taskId)
-    const extMatch = filename.match(/\.(docx|xlsx)$/i)
+    const extMatch = filename.match(/\.(docx|xlsx|pptx)$/i)
     const ext = extMatch ? extMatch[0] : '.docx'
-    const base = filename.replace(/\.(docx|xlsx)$/i, '')
+    const base = filename.replace(/\.(docx|xlsx|pptx)$/i, '')
     const suffix = ext.toLowerCase() === '.xlsx' ? '翻译版' : '双语'
     const downloadName = parseDownloadName(res.headers['content-disposition'], `${base}_${suffix}${ext}`)
     saveBlob(res.data, downloadName)
@@ -154,6 +154,8 @@ async function handleDelete(taskId) {
         </template>
       </el-table-column>
       <el-table-column prop="created_at" label="创建时间" width="180" />
+      <el-table-column prop="started_at" label="开始时间" width="180" />
+      <el-table-column prop="completed_at" label="结束时间" width="180" />
       <el-table-column label="操作" width="160" fixed="right">
         <template #default="{ row }">
           <el-button

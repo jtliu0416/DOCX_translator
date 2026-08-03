@@ -2,12 +2,13 @@
 
 ## 1. 项目概述
 
-Doctrans 是一个基于 Web 的 DOCX 文档双语翻译平台，支持将中文文档翻译为英文并生成中英双语对照文档。系统保留原文内容和格式，将英文译文按规则插入文档中。
+Doctrans 是一个基于 Web 的文档翻译平台，支持 DOCX、XLSX、PPTX 文件翻译。系统尽量保留原文内容和格式，DOCX/PPTX 生成双语对照文件，XLSX 生成译文替换版文件。
 
 ### 核心特性
 
-- 上传 DOCX 文件，自动提取文本并翻译为英文
-- 生成中英双语对照文档：标题行内追加、正文插入新段落、表格单元格内换行追加
+- 上传 DOCX、XLSX、PPTX 文件，自动提取文本并翻译为目标语言
+- DOCX 生成中英双语对照文档：标题行内追加、正文插入新段落、表格单元格内换行追加
+- PPTX 生成逐页双语对照文稿：保留原页，并在原页后插入对应译文页
 - 支持术语表（Glossary）确保专业术语翻译一致性
 - 支持多种 LLM 提供商（Anthropic Claude、DeepSeek、GLM、Qwen、豆包等）
 - Cookie-Token 身份识别，无需注册登录
@@ -122,6 +123,12 @@ LLM_PROVIDER=anthropic
 LLM_API_URL=https://api.anthropic.com
 LLM_API_KEY=sk-xxx
 LLM_MODEL=claude-sonnet-4-6
+
+# 上传文件大小限制（MB）；设为 0 表示不限制
+MAX_FILE_SIZE_MB=100
+
+# 前端分片上传大小（MB）
+UPLOAD_CHUNK_SIZE_MB=5
 ```
 
 **已支持的提供商配置示例：**
@@ -138,7 +145,8 @@ LLM_MODEL=claude-sonnet-4-6
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `MAX_FILE_SIZE` | 10 MB | 上传文件大小限制 |
+| `MAX_FILE_SIZE_MB` | 100 MB | 上传文件大小限制，设为 0 表示不限制 |
+| `UPLOAD_CHUNK_SIZE_MB` | 5 MB | 前端分片上传的单片大小 |
 | `MAX_PARALLEL_TASKS` | 3 | 每个 Token 最大并行任务数 |
 | `TRANSLATION_BATCH_SIZE` | 20 | 每批翻译段落数 |
 | `LLM_MAX_RETRIES` | 3 | LLM 调用最大重试次数 |
@@ -196,15 +204,15 @@ pending → extracting → translating → building → completed
 
 ### 6.2 处理流程
 
-1. **文件上传**：用户上传 DOCX → 保存到 `uploads/{task_id}/original.docx` → 创建数据库记录
-2. **文本提取**：调用 .NET CLI 执行 `extract` 命令，输出 `paragraphs.json`
+1. **文件上传**：前端按 `UPLOAD_CHUNK_SIZE_MB` 分片上传 → 后端暂存到 `uploads/.chunks/{upload_id}` → 完成后合并到 `uploads/{task_id}/original.*` → 创建数据库记录
+2. **文本提取**：按文件类型提取 DOCX 段落、XLSX 单元格或 PPTX 文本单元，输出 `units.json`
 3. **LLM 翻译**：
    - 按每 20 段切分为批次
    - 使用 `asyncio.Semaphore(3)` 控制最大 3 个批次并发
    - 注入术语表到翻译提示词
    - 实时更新翻译进度到数据库
    - 遇到 429 限流时指数退避重试
-4. **双语文档生成**：调用 .NET CLI 执行 `insert` 命令，输出双语 DOCX
+4. **结果文件生成**：DOCX 输出双语文档，XLSX 输出译文替换版，PPTX 输出逐页双语对照文稿
 5. **完成**：更新状态，用户可下载
 
 ### 6.3 LLM 翻译提示词

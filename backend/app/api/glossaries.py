@@ -8,14 +8,16 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from typing import Optional
 
 from ..config import GLOSSARY_DIR
+from ..auth import get_current_user
 from ..database import get_db
 from ..services.glossary import parse_glossary_file, save_glossary_terms
+from ..time_utils import local_now_string
 
 router = APIRouter(prefix="/api/glossaries", tags=["glossaries"])
 
 
-def _get_token(request: Request) -> str:
-    return getattr(request.state, "token", "") or request.cookies.get("token", "")
+def _get_owner_workid(request: Request) -> str:
+    return get_current_user(request).workid
 
 
 @router.post("")
@@ -27,9 +29,7 @@ async def create_glossary(
     target_lang: str = Form("en"),
 ):
     """Upload a glossary file."""
-    token = _get_token(request)
-    if not token:
-        raise HTTPException(401, "请先访问首页")
+    owner_workid = _get_owner_workid(request)
 
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in (".csv", ".xlsx", ".txt"):
@@ -53,9 +53,10 @@ async def create_glossary(
 
     db = await get_db()
     await db.execute(
-        """INSERT INTO glossaries (id, token, name, source_lang, target_lang, file_path, term_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (glossary_id, token, name, source_lang, target_lang, file_path, len(terms)),
+        """INSERT INTO glossaries
+        (id, token, owner_workid, name, source_lang, target_lang, file_path, term_count, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (glossary_id, owner_workid, owner_workid, name, source_lang, target_lang, file_path, len(terms), local_now_string()),
     )
     await db.commit()
     await db.close()
@@ -67,15 +68,13 @@ async def create_glossary(
 
 @router.get("")
 async def list_glossaries(request: Request):
-    """List glossaries for current token."""
-    token = _get_token(request)
-    if not token:
-        return []
+    """List built-in glossaries and those owned by the current user."""
+    owner_workid = _get_owner_workid(request)
 
     db = await get_db()
     cursor = await db.execute(
-        "SELECT id, name, source_lang, target_lang, term_count, created_at, is_builtin FROM glossaries WHERE token = ? OR is_builtin = 1 ORDER BY is_builtin DESC, created_at DESC",
-        (token,),
+        "SELECT id, name, source_lang, target_lang, term_count, created_at, is_builtin FROM glossaries WHERE owner_workid = ? OR is_builtin = 1 ORDER BY is_builtin DESC, created_at DESC",
+        (owner_workid,),
     )
     rows = await cursor.fetchall()
     await db.close()
@@ -94,10 +93,12 @@ async def list_glossaries(request: Request):
 @router.get("/{glossary_id}")
 async def get_glossary(glossary_id: str, request: Request):
     """Get glossary detail with term preview."""
+    owner_workid = _get_owner_workid(request)
     db = await get_db()
     cursor = await db.execute(
-        "SELECT id, name, source_lang, target_lang, term_count, created_at, is_builtin FROM glossaries WHERE id = ?",
-        (glossary_id,),
+        """SELECT id, name, source_lang, target_lang, term_count, created_at, is_builtin
+           FROM glossaries WHERE id = ? AND (owner_workid = ? OR is_builtin = 1)""",
+        (glossary_id, owner_workid),
     )
     row = await cursor.fetchone()
 
@@ -139,8 +140,12 @@ async def get_glossary(glossary_id: str, request: Request):
 @router.delete("/{glossary_id}")
 async def delete_glossary(glossary_id: str, request: Request):
     """Delete a glossary and its file."""
+    owner_workid = _get_owner_workid(request)
     db = await get_db()
-    cursor = await db.execute("SELECT file_path, is_builtin FROM glossaries WHERE id = ?", (glossary_id,))
+    cursor = await db.execute(
+        "SELECT file_path, is_builtin FROM glossaries WHERE id = ? AND owner_workid = ?",
+        (glossary_id, owner_workid),
+    )
     row = await cursor.fetchone()
 
     if not row:
@@ -155,7 +160,7 @@ async def delete_glossary(glossary_id: str, request: Request):
     shutil.rmtree(glossary_dir, ignore_errors=True)
 
     await db.execute("DELETE FROM glossary_terms WHERE glossary_id = ?", (glossary_id,))
-    await db.execute("DELETE FROM glossaries WHERE id = ?", (glossary_id,))
+    await db.execute("DELETE FROM glossaries WHERE id = ? AND owner_workid = ?", (glossary_id, owner_workid))
     await db.commit()
     await db.close()
 

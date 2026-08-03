@@ -1,6 +1,7 @@
 """Built-in biopharma glossary seed data and initialization."""
 
 from .builtin_terms_data import BUILTIN_TERMS
+from ..time_utils import local_now_string
 
 BUILTIN_GLOSSARY_ID = "builtin-biopharma-zh-en"
 BUILTIN_GLOSSARY_NAME = "生物制药专业术语对照表"
@@ -9,9 +10,10 @@ BUILTIN_GLOSSARY_NAME = "生物制药专业术语对照表"
 async def seed_builtin_glossary(db):
     """Insert built-in glossary if not already present."""
     await db.execute(
-        """INSERT OR IGNORE INTO glossaries (id, token, name, source_lang, target_lang, file_path, term_count, is_builtin)
-        VALUES (?, '__builtin__', ?, 'zh', 'en', '__builtin__', ?, 1)""",
-        (BUILTIN_GLOSSARY_ID, BUILTIN_GLOSSARY_NAME, len(BUILTIN_TERMS)),
+        """INSERT OR IGNORE INTO glossaries
+        (id, token, name, source_lang, target_lang, file_path, term_count, created_at, is_builtin)
+        VALUES (?, '__builtin__', ?, 'zh', 'en', '__builtin__', ?, ?, 1)""",
+        (BUILTIN_GLOSSARY_ID, BUILTIN_GLOSSARY_NAME, len(BUILTIN_TERMS), local_now_string()),
     )
     cursor = await db.execute("SELECT changes()")
     if (await cursor.fetchone())[0] == 0:

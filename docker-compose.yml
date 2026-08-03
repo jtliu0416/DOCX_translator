@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VITE_WEBUI_ORIGIN: ${VITE_WEBUI_ORIGIN:?Set the trusted WebUI origin before building}
     container_name: doctrans
     ports:
       - "8000:8000"
@@ -13,6 +15,8 @@ services:
       UPLOAD_DIR: /data/uploads
       RESULT_DIR: /data/results
       GLOSSARY_DIR: /data/glossaries
+      MAX_FILE_SIZE_MB: 100
+      UPLOAD_CHUNK_SIZE_MB: 5
     volumes:
       - ./data:/data
     restart: unless-stopped

@@ -1,4 +1,7 @@
-FROM node:20-alpine AS frontend-builder
+ARG DOCKERHUB_PROXY=docker.m.daocloud.io
+FROM ${DOCKERHUB_PROXY}/library/node:20-alpine AS frontend-builder
+ARG VITE_WEBUI_ORIGIN
+ENV VITE_WEBUI_ORIGIN=${VITE_WEBUI_ORIGIN}
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN set -eux; \
@@ -37,7 +40,7 @@ RUN set -eux; \
       --source https://api.nuget.org/v3/index.json
 RUN dotnet publish -c Release -r linux-x64 --self-contained true --no-restore /p:PublishSingleFile=true /p:PublishTrimmed=false -o /out/docxproc
 
-FROM python:3.11-slim AS runtime
+FROM ${DOCKERHUB_PROXY}/library/python:3.11-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 WORKDIR /app/backend

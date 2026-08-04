@@ -11,10 +11,14 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "uploads"))
 RESULT_DIR = os.getenv("RESULT_DIR", os.path.join(BASE_DIR, "results"))
 GLOSSARY_DIR = os.getenv("GLOSSARY_DIR", os.path.join(BASE_DIR, "glossaries"))
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Shanghai")
+APP_VERSION = os.getenv("APP_VERSION", "dev")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 JWT_ISSUER = os.getenv("JWT_ISSUER", "")
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "")
+JWT_LEEWAY_SECONDS = int(os.getenv("JWT_LEEWAY_SECONDS", "60"))
+if not 0 <= JWT_LEEWAY_SECONDS <= 300:
+    raise ValueError("JWT_LEEWAY_SECONDS must be between 0 and 300")
 CORS_ALLOWED_ORIGINS = tuple(
     origin.strip().rstrip("/")
     for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")

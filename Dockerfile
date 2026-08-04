@@ -1,7 +1,7 @@
 ARG DOCKERHUB_PROXY=docker.m.daocloud.io
 FROM ${DOCKERHUB_PROXY}/library/node:20-alpine AS frontend-builder
-ARG VITE_WEBUI_ORIGIN
-ENV VITE_WEBUI_ORIGIN=${VITE_WEBUI_ORIGIN}
+ARG VITE_WEBUI_ORIGINS
+ENV VITE_WEBUI_ORIGINS=${VITE_WEBUI_ORIGINS}
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN set -eux; \
@@ -41,8 +41,14 @@ RUN set -eux; \
 RUN dotnet publish -c Release -r linux-x64 --self-contained true --no-restore /p:PublishSingleFile=true /p:PublishTrimmed=false -o /out/docxproc
 
 FROM ${DOCKERHUB_PROXY}/library/python:3.11-slim AS runtime
+ARG APP_VERSION=dev
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.title="Doctrans" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV APP_VERSION=${APP_VERSION}
 WORKDIR /app/backend
 
 RUN set -eux; \

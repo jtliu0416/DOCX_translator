@@ -80,6 +80,11 @@ class JwtApiAccessTest(TestCase):
         self.assertEqual(self.client.get("/api/tasks").status_code, 401)
         self.assertEqual(self.client.get("/api/tasks", headers=self.headers_for("W1001")).status_code, 200)
 
+    def test_health_does_not_require_authentication(self) -> None:
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
     def test_task_detail_is_isolated_by_workid(self) -> None:
         self.insert_task("task-owned-by-a", "A100")
         denied = self.client.get("/api/tasks/task-owned-by-a", headers=self.headers_for("B200"))

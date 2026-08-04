@@ -6,7 +6,7 @@ import jwt
 from fastapi import Request
 from jwt import ExpiredSignatureError, InvalidTokenError
 
-from .config import JWT_AUDIENCE, JWT_ISSUER, JWT_SECRET
+from .config import JWT_AUDIENCE, JWT_ISSUER, JWT_LEEWAY_SECONDS, JWT_SECRET
 
 
 REQUIRED_CLAIMS = ("workid", "cnname", "depart", "username", "role")
@@ -50,7 +50,7 @@ def authenticate_authorization_header(authorization: str | None) -> CurrentUser:
             issuer=JWT_ISSUER,
             audience=JWT_AUDIENCE,
             options={"require": list(REQUIRED_CLAIMS)},
-            leeway=0,
+            leeway=JWT_LEEWAY_SECONDS,
         )
     except ExpiredSignatureError as exc:
         raise JwtAuthenticationError("JWT has expired") from exc

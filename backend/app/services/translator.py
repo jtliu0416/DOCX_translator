@@ -549,18 +549,16 @@ def _log_llm_response(
 ) -> None:
     indices = [item.get("index") for item in batch]
     logger.info(
-        (
-            "LLM full response task_id=%s provider=%s model=%s attempt=%s "
-            "batch_size=%s indices=%s:\n%s\nLLM content for parsing:\n%s"
-        ),
+        "LLM response received task_id=%s provider=%s model=%s attempt=%s "
+        "batch_size=%s indices=%s response_chars=%s content_chars=%s",
         task_id,
         llm.provider,
         llm.model,
         attempt + 1,
         len(batch),
         indices,
-        full_response,
-        raw,
+        len(full_response),
+        len(raw) if raw else 0,
     )
 
 
@@ -570,14 +568,12 @@ def _log_matched_glossary_terms(
     task_id: str = "",
 ) -> None:
     indices = [item.get("index") for item in batch]
-    pairs = [f'{term.get("source", "")} -> {term.get("target", "")}' for term in matched_terms]
     logger.info(
-        "Matched glossary terms task_id=%s batch_size=%s indices=%s count=%s terms=%s",
+        "Matched glossary terms task_id=%s batch_size=%s indices=%s count=%s",
         task_id,
         len(batch),
         indices,
         len(matched_terms),
-        pairs,
     )
 
 

@@ -201,6 +201,11 @@ class LLMRequestLoggingTest(IsolatedAsyncioTestCase):
         self.assertIn("batch_request_no=1", logs)
         self.assertIn("batch_request_no=2", logs)
         self.assertRegex(logs, r"prompt_tokens=\d+")
+        self.assertIn("LLM response received task_id=task-1", logs)
+        self.assertIn("response_chars=", logs)
+        self.assertNotIn("first response", logs)
+        self.assertNotIn("second response", logs)
+        self.assertNotIn("Translated", logs)
 
     async def test_mismatch_writes_llm_failure_artifact(self) -> None:
         async def fake_call_openai_compatible(prompt: str):

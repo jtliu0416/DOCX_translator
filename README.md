@@ -109,12 +109,13 @@ TRANSLATION_BATCH_CONCURRENCY=3    # 单个任务内同时请求大模型的批�
 JWT_SECRET=                      # 至少 32 个 UTF-8 字节，禁止写入源码
 JWT_ISSUER=non-gmp-lims
 JWT_AUDIENCE=web-ui
-CORS_ALLOWED_ORIGINS=https://webui.example.internal
+JWT_LEEWAY_SECONDS=60            # 允许签发端与验签端最多 60 秒时钟偏差，范围 0-300
+CORS_ALLOWED_ORIGINS=https://webui.example.internal,http://10.56.0.25:8189
 ```
 
-JWT 使用 HS256，必须包含 `workid`、`cnname`、`depart`、`username`、`role` claims；过期立即失效。任务、术语表及上传会话按 `workid` 隔离。WebUI 应通过窗口 `postMessage` 向独立翻译页交接 token，禁止把 JWT 放进 URL；翻译页将它仅保存于 `sessionStorage`。
+JWT 使用 HS256，必须包含 `workid`、`cnname`、`depart`、`username`、`role` claims；时间校验仅允许 `JWT_LEEWAY_SECONDS` 配置的有限时钟容差。任务、术语表及上传会话按 `workid` 隔离。WebUI 应通过窗口 `postMessage` 向独立翻译页交接 token，禁止把 JWT 放进 URL；翻译页将它仅保存于 `sessionStorage`。
 
-`VITE_WEBUI_ORIGIN` 是翻译前端构建时变量，须在运行 Docker Compose 前导出，例如：`$env:VITE_WEBUI_ORIGIN='http://10.56.0.25'`。它必须精确等于打开翻译页的 WebUI origin；Docker Compose 会将其传入 Vite 构建阶段。
+`VITE_WEBUI_ORIGINS` 是翻译前端构建时变量，须在运行 Docker Compose 前导出，例如：`$env:VITE_WEBUI_ORIGINS='http://innovatex.intbio.com:8189,http://10.56.0.25:8189'`。多个 origin 使用逗号分隔，每项必须精确等于可能打开翻译页的 WebUI origin；Docker Compose 会将其传入 Vite 构建阶段。为兼容旧配置，Compose 仍接受单值 `VITE_WEBUI_ORIGIN`。
 
 **已验证支持的模型：**
 
@@ -133,6 +134,8 @@ JWT 使用 HS256，必须包含 `workid`、`cnname`、`depart`、`username`、`r
 ```bash
 docker compose up -d --build
 ```
+
+正式环境不得直接部署未提交的开发目录。没有 CI/CD 时，请使用带版本标签、自动备份、健康检查和回滚保护的人工发布流程，详见 [生产发布手册](docs/production-deployment.md)。
 
 说明：
 - 服务端口：`8000`

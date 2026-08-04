@@ -11,12 +11,15 @@ __pycache__/
 venv/
 
 # Environment & secrets
+/.env
 backend/.env
 backend/.env.*
 !.env.example
 frontend/.env
 frontend/.env.*
 !frontend/.env.example
+deploy/*.env
+!deploy/*.env.example
 
 # Database
 backend/doctrans.db

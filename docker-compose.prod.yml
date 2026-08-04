@@ -1,16 +1,14 @@
 services:
   doctrans:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        VITE_WEBUI_ORIGINS: ${VITE_WEBUI_ORIGINS:-${VITE_WEBUI_ORIGIN:?Set the trusted WebUI origins before building}}
+    image: doctrans:${DOCTRANS_VERSION:?Set the release or rollback image version}
     container_name: doctrans
+    init: true
     ports:
-      - "8000:8000"
+      - "${DOCTRANS_PORT:-8000}:8000"
     env_file:
       - ./backend/.env
     environment:
+      APP_VERSION: ${DOCTRANS_VERSION}
       DATABASE_PATH: /data/doctrans.db
       UPLOAD_DIR: /data/uploads
       RESULT_DIR: /data/results
@@ -26,4 +24,11 @@ services:
       retries: 6
       start_period: 20s
     stop_grace_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "5"
     restart: unless-stopped

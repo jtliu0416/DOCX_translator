@@ -21,13 +21,14 @@ class WebUiJwtAuthenticationTest(TestCase):
     }
 
     def setUp(self) -> None:
-        self.original = (auth.JWT_SECRET, auth.JWT_ISSUER, auth.JWT_AUDIENCE)
+        self.original = (auth.JWT_SECRET, auth.JWT_ISSUER, auth.JWT_AUDIENCE, auth.JWT_LEEWAY_SECONDS)
         auth.JWT_SECRET = self.secret
         auth.JWT_ISSUER = "non-gmp-lims"
         auth.JWT_AUDIENCE = "web-ui"
+        auth.JWT_LEEWAY_SECONDS = 60
 
     def tearDown(self) -> None:
-        auth.JWT_SECRET, auth.JWT_ISSUER, auth.JWT_AUDIENCE = self.original
+        auth.JWT_SECRET, auth.JWT_ISSUER, auth.JWT_AUDIENCE, auth.JWT_LEEWAY_SECONDS = self.original
 
     def make_token(self, **overrides: object) -> str:
         payload = {
@@ -53,9 +54,24 @@ class WebUiJwtAuthenticationTest(TestCase):
 
     def test_rejects_expired_wrong_audience_and_missing_claim(self) -> None:
         for token in (
-            self.make_token(exp=datetime.now(timezone.utc) - timedelta(seconds=1)),
+            self.make_token(exp=datetime.now(timezone.utc) - timedelta(minutes=2)),
             self.make_token(aud="other-service"),
             self.make_token(role=None),
         ):
             with self.assertRaises(auth.JwtAuthenticationError):
                 auth.authenticate_authorization_header(f"Bearer {token}")
+
+    def test_accepts_token_with_clock_skew_within_leeway(self) -> None:
+        issuer_time = datetime.now(timezone.utc) + timedelta(seconds=30)
+        token = self.make_token(iat=issuer_time, nbf=issuer_time)
+
+        user = auth.authenticate_authorization_header(f"Bearer {token}")
+
+        self.assertEqual(user.workid, "W1001")
+
+    def test_rejects_token_not_active_beyond_leeway(self) -> None:
+        issuer_time = datetime.now(timezone.utc) + timedelta(minutes=2)
+        token = self.make_token(iat=issuer_time, nbf=issuer_time)
+
+        with self.assertRaises(auth.JwtAuthenticationError):
+            auth.authenticate_authorization_header(f"Bearer {token}")

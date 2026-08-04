@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .auth import JwtAuthenticationError, authenticate_authorization_header, validate_jwt_configuration
-from .config import CORS_ALLOWED_ORIGINS
+from .config import APP_VERSION, CORS_ALLOWED_ORIGINS
 from .database import init_db
 from .api.tasks import router as tasks_router, run_translation
 from .api.glossaries import router as glossaries_router
@@ -28,7 +28,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Doctrans", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Doctrans", version=APP_VERSION, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,6 +37,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health", include_in_schema=False)
+async def health():
+    return {"status": "ok", "version": APP_VERSION}
 
 @app.middleware("http")
 async def jwt_middleware(request: Request, call_next):

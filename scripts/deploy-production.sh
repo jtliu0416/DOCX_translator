@@ -65,10 +65,14 @@ done
 jwt_secret=$(awk -F= '$1 == "JWT_SECRET" {sub(/^[^=]*=/, ""); print; exit}' "$repo_root/backend/.env")
 [[ ${#jwt_secret} -ge 32 ]] || fail "JWT_SECRET must contain at least 32 characters"
 
-git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "Not a Git worktree"
-[[ -z $(git -C "$repo_root" status --porcelain --untracked-files=normal) ]] || fail "Git worktree is not clean"
-release_commit=$(git -C "$repo_root" rev-parse --verify "refs/tags/${release}^{commit}" 2>/dev/null) || fail "Tag does not exist: $release"
-head_commit=$(git -C "$repo_root" rev-parse HEAD)
+git_in_repo() {
+  (cd "$repo_root" && git "$@")
+}
+
+git_in_repo rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "Not a Git worktree"
+[[ -z $(git_in_repo status --porcelain --untracked-files=normal) ]] || fail "Git worktree is not clean"
+release_commit=$(git_in_repo rev-parse --verify "refs/tags/${release}^{commit}" 2>/dev/null) || fail "Tag does not exist: $release"
+head_commit=$(git_in_repo rev-parse HEAD)
 [[ "$head_commit" == "$release_commit" ]] || fail "HEAD is not the commit tagged $release"
 
 image="doctrans:$release"

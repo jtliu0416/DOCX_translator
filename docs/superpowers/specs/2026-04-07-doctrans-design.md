@@ -141,7 +141,13 @@ DELETE /api/tasks/{id}             删除任务及文件
 **POST /api/tasks**
 - Request: `multipart/form-data` — `file` (DOCX), `source_lang`, `target_lang`, `glossary_id`（可选）
 - Response: `{ "task_id": "uuid", "status": "pending" }`
-- Limit: 文件最大 10MB
+- 兼容旧版直传。新版前端默认使用分片上传接口。
+- Limit: 文件默认最大 100MB，可通过 `MAX_FILE_SIZE_MB` 调整；设为 0 表示不限制；默认分片大小 5MB，可通过 `UPLOAD_CHUNK_SIZE_MB` 调整
+
+**分片上传**
+- `POST /api/tasks/uploads` — 创建上传会话，返回 `upload_id`, `chunk_size`, `chunk_count`
+- `POST /api/tasks/uploads/{upload_id}/chunks` — 上传单个分片，字段为 `index` 和 `file`
+- `POST /api/tasks/uploads/{upload_id}/complete` — 校验并合并分片，创建翻译任务
 
 **GET /api/tasks**
 - Query: `?page=1&page_size=20`
@@ -213,7 +219,7 @@ GET    /api/languages              获取支持的语言列表
 ### 边界状态处理
 
 - 上传非 DOCX 文件 → 提示格式不支持
-- 文件超过 10MB → 提示文件过大
+- 文件超过配置上限 → 提示文件过大
 - 翻译失败 → 显示错误原因 + 重试按钮
 - 历史记录为空 → 引导去翻译页
 - 下载时文件已过期 → 提示"文件已过期"
@@ -410,7 +416,7 @@ subprocess.run(CLI + ["validate", "--input", result_path], ...)
 | 场景 | 处理方式 |
 |------|---------|
 | 上传非 DOCX 文件 | 前端校验后缀名 + 后端校验 MIME type |
-| 文件超过 10MB | 前端 + 后端双重校验 |
+| 文件超过配置上限 | 后端校验并返回错误提示 |
 | 空文档（无文本段落） | 提取后发现 0 段，标记 failed |
 | 文档含图片/表格 | 图片忽略，表格单元格含中文则翻译（换行追加英文），纯数字/英文单元格跳过 |
 | 已翻译内容（中英混合） | 检测英文占比 > 30%，自动跳过不重复翻译 |
@@ -430,7 +436,8 @@ subprocess.run(CLI + ["validate", "--input", result_path], ...)
 ## 配置项
 
 ```python
-MAX_FILE_SIZE = 10 * 1024 * 1024      # 10MB
+MAX_FILE_SIZE_MB = 100                 # 上传文件大小限制；0 表示不限制
+UPLOAD_CHUNK_SIZE_MB = 5               # 前端分片上传的单片大小
 MAX_PARALLEL_TASKS = 3                  # 每 token 并行任务上限
 TRANSLATION_BATCH_SIZE = 20             # 每批翻译段落数
 LLM_MAX_RETRIES = 3                     # LLM 调用重试次数

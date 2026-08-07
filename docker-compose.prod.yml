@@ -1,0 +1,34 @@
+services:
+  doctrans:
+    image: doctrans:${DOCTRANS_VERSION:?Set the release or rollback image version}
+    container_name: doctrans
+    init: true
+    ports:
+      - "${DOCTRANS_PORT:-8000}:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      APP_VERSION: ${DOCTRANS_VERSION}
+      DATABASE_PATH: /data/doctrans.db
+      UPLOAD_DIR: /data/uploads
+      RESULT_DIR: /data/results
+      GLOSSARY_DIR: /data/glossaries
+      MAX_FILE_SIZE_MB: 100
+      UPLOAD_CHUNK_SIZE_MB: 5
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    stop_grace_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "5"
+    restart: unless-stopped

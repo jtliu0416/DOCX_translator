@@ -1,0 +1,29 @@
+services:
+  doctrans:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_WEBUI_ORIGINS: ${VITE_WEBUI_ORIGINS:-${VITE_WEBUI_ORIGIN:?Set the trusted WebUI origins before building}}
+    container_name: doctrans
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_PATH: /data/doctrans.db
+      UPLOAD_DIR: /data/uploads
+      RESULT_DIR: /data/results
+      GLOSSARY_DIR: /data/glossaries
+      MAX_FILE_SIZE_MB: 100
+      UPLOAD_CHUNK_SIZE_MB: 5
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    stop_grace_period: 45s
+    restart: unless-stopped

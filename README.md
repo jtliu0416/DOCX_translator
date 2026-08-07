@@ -1,6 +1,6 @@
 # Doctrans
 
-基于 AI 大模型的 DOCX 文档智能翻译平台，自动生成中英双语对照文档，完美保留原文格式。
+基于 AI 大模型的文档智能翻译平台，支持 DOCX、XLSX、PPTX 文件翻译，尽量保留原文格式。
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue" />
@@ -13,8 +13,9 @@
 
 ## 功能特性
 
-- **一键翻译** — 上传 DOCX 文件，自动提取中文内容，AI 翻译为英文，生成中英双语对照文档
+- **一键翻译** — 上传 DOCX、XLSX、PPTX 文件，自动提取中文内容并用 AI 翻译为英文
 - **格式完美保留** — 基于 OpenXML SDK 直接操作文档底层结构，标题、正文、表格格式零丢失
+- **多格式支持** — DOCX 生成双语对照文档，PPTX 生成逐页双语对照文稿，XLSX 生成译文替换版文件
 - **多文件批量处理** — 支持同时上传多个文件，后台自动排队，逐个翻译
 - **内置生物制药术语表** — 预置 375 条生物制药专业术语（中英对照），翻译时默认启用，可预览和搜索
 - **自定义术语表** — 上传自定义术语对照表，与内置术语表合并使用（自定义优先）
@@ -77,7 +78,44 @@ LLM_PROVIDER=openai_compatible
 LLM_API_URL=https://api.deepseek.com
 LLM_API_KEY=sk-your-api-key
 LLM_MODEL=deepseek-chat
+
+# OpenAI 兼容接口默认关闭模型思考/推理输出，避免 reasoning 占满输出 token
+LLM_DISABLE_REASONING=true
+# 如供应商需要特殊参数，可用 JSON 追加或覆盖请求 extra_body
+# LLM_OPENAI_COMPATIBLE_EXTRA_BODY_JSON={"chat_template_kwargs":{"enable_thinking":false}}
+
+# 上传文件大小限制（MB）；设为 0 表示不限制
+MAX_FILE_SIZE_MB=100
+
+# 前端分片上传大小（MB）
+UPLOAD_CHUNK_SIZE_MB=5
+
+# 数据库存储时间的应用时区
+APP_TIMEZONE=Asia/Shanghai
+
+# 并发配置
+MAX_PARALLEL_TASKS=20              # 每个用户最多未完成任务数；0 表示不限制
+MAX_CONCURRENT_TRANSLATIONS=2      # 全局同时执行翻译任务数；0 表示不限制
+TRANSLATION_BATCH_CONCURRENCY=3    # 单个任务内同时请求大模型的批次数
 ```
+
+默认最大同时大模型请求数 = `MAX_CONCURRENT_TRANSLATIONS * TRANSLATION_BATCH_CONCURRENCY`，即 `2 * 3 = 6`。前端多文件上传和单文件分片上传均为串行上传；后端未额外限制自定义客户端并行上传分片。
+
+### WebUI JWT 集成
+
+本服务只接受 WebUI `userToken` 的 Bearer JWT，不再生成或信任浏览器 cookie UUID。部署时必须为登录服务与翻译服务注入完全相同的以下环境变量：
+
+```ini
+JWT_SECRET=                      # 至少 32 个 UTF-8 字节，禁止写入源码
+JWT_ISSUER=non-gmp-lims
+JWT_AUDIENCE=web-ui
+JWT_LEEWAY_SECONDS=60            # 允许签发端与验签端最多 60 秒时钟偏差，范围 0-300
+CORS_ALLOWED_ORIGINS=https://webui.example.internal,http://10.56.0.25:8189
+```
+
+JWT 使用 HS256，必须包含 `workid`、`cnname`、`depart`、`username`、`role` claims；时间校验仅允许 `JWT_LEEWAY_SECONDS` 配置的有限时钟容差。任务、术语表及上传会话按 `workid` 隔离。WebUI 应通过窗口 `postMessage` 向独立翻译页交接 token，禁止把 JWT 放进 URL；翻译页将它仅保存于 `sessionStorage`。
+
+`VITE_WEBUI_ORIGINS` 是翻译前端构建时变量，须在运行 Docker Compose 前导出，例如：`$env:VITE_WEBUI_ORIGINS='http://innovatex.intbio.com:8189,http://10.56.0.25:8189'`。多个 origin 使用逗号分隔，每项必须精确等于可能打开翻译页的 WebUI origin；Docker Compose 会将其传入 Vite 构建阶段。为兼容旧配置，Compose 仍接受单值 `VITE_WEBUI_ORIGIN`。
 
 **已验证支持的模型：**
 
@@ -89,7 +127,34 @@ LLM_MODEL=deepseek-chat
 | 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
 | 豆包 | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-2-0-lite-260215` |
 
-### 2. 启动后端
+### 2. Docker 部署（推荐 Linux 服务器）
+
+在项目根目录执行：
+
+```bash
+docker compose up -d --build
+```
+
+正式环境不得直接部署未提交的开发目录。没有 CI/CD 时，请使用带版本标签、自动备份、健康检查和回滚保护的人工发布流程，详见 [生产发布手册](docs/production-deployment.md)。
+
+说明：
+- 服务端口：`8000`
+- 数据持久化目录：`./data`（SQLite、上传文件、翻译结果、术语表）
+- 模型配置来源：`backend/.env`（由 `docker-compose.yml` 自动加载）
+
+查看日志：
+
+```bash
+docker compose logs -f
+```
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+### 3. 启动后端（本地开发）
 
 ```bash
 cd backend
@@ -97,7 +162,7 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 3. 构建前端（可选）
+### 4. 构建前端（可选）
 
 开发模式：
 ```bash
@@ -113,16 +178,16 @@ npm install
 npm run build
 ```
 
-### 4. 访问
+### 5. 访问
 
 浏览器打开 `http://localhost:8000`
 
 ## 使用方式
 
-1. **上传文档** — 拖拽一个或多个 `.docx` 文件到上传区域
+1. **上传文档** — 拖拽一个或多个 `.docx`、`.xlsx`、`.pptx` 文件到上传区域
 2. **选择术语表** — 内置生物制药术语表默认启用，也可上传自定义术语表
 3. **开始翻译** — 点击按钮，实时查看翻译进度
-4. **下载结果** — 翻译完成后下载中英双语对照文档
+4. **下载结果** — 翻译完成后下载生成的翻译文档
 
 > 📷 *【操作流程截图】*
 
@@ -145,6 +210,8 @@ Doctrans/
 │       └── services/
 │           ├── translator.py         # LLM 翻译引擎
 │           ├── docx_handler.py       # DOCX 处理封装
+│           ├── excel_handler.py      # XLSX 处理封装
+│           ├── pptx_handler.py       # PPTX 处理封装
 │           ├── queue.py              # 并发翻译队列
 │           ├── glossary.py           # 术语表解析
 │           ├── builtin_glossary.py   # 内置术语表初始化
@@ -166,7 +233,10 @@ Doctrans/
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/tasks` | 上传文件创建翻译任务 |
+| POST | `/api/tasks/uploads` | 创建分片上传会话 |
+| POST | `/api/tasks/uploads/{upload_id}/chunks` | 上传单个文件分片 |
+| POST | `/api/tasks/uploads/{upload_id}/complete` | 合并分片并创建翻译任务 |
+| POST | `/api/tasks` | 兼容旧版直传：上传文件创建翻译任务 |
 | GET | `/api/tasks` | 查询任务列表 |
 | GET | `/api/tasks/{id}` | 查询任务状态 |
 | GET | `/api/tasks/{id}/download` | 下载翻译结果 |
